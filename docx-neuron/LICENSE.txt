@@ -1,0 +1,10 @@
+docx-neuron
+Dibuat oleh Dimas Prasetio untuk Neuronworks Indonesia.
+
+Desain dokumen, scripts/neuron_theme.js, dan logo Neuron (assets/logo_neuron.png) adalah milik
+Neuronworks Indonesia. Logo Neuron adalah identitas merek Neuronworks dan tidak boleh dipakai
+untuk dokumen di luar Neuronworks Indonesia.
+
+Komponen pihak ketiga yang dibundel tetap tunduk pada lisensinya masing-masing:
+- scripts/vendor/docx.bundle.cjs (pustaka docx dan dependensinya): lihat THIRD_PARTY_NOTICES.txt
+- scripts/office/, comment.py, merge_runs.py, accept_changes.py, templates/: berasal dari skill docx Anthropic
