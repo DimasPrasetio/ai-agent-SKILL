@@ -105,6 +105,22 @@
         "No real .env with secrets is created; only .env.example and infra/elcodelabs/.env.production.example",
         "Claude did not run any command that changes the VPS (no DB creation, nginx, certbot, docker login, or deploy)"
       ]
+    },
+    {
+      "id": 6,
+      "eval_name": "design-research-before-ui",
+      "prompt": "Saya sudah punya monorepo 'klinikgigi' hasil skill ini (NestJS + React). Sekarang buatkan tampilan frontend-nya: halaman publik untuk booking jadwal dokter gigi dan dashboard admin klinik untuk mengelola jadwal & pasien. Target pengguna di Indonesia.",
+      "expected_output": "Before writing any UI code, Claude researches current sources on the internet about how clinic/dental booking sites and clinic admin dashboards are ideally and commonly designed, writes the findings, design direction, anti-patterns, and dated sources into knowledge/DESIGN.md, then builds the screens through the frontend-design skill following that brief.",
+      "files": [],
+      "assertions": [
+        "Claude performed web research (WebSearch/WebFetch or browser) BEFORE writing UI components",
+        "Research covers real products in the clinic/dental booking category, at least one design system or platform guideline, and at least one UX research source",
+        "knowledge/DESIGN.md is filled: status no longer 'NOT RESEARCHED YET', research date set, findings, design direction, anti-patterns, and a Sources list with URLs and access dates",
+        "The brief distinguishes the public booking flow (patients, mostly phone) from the admin dashboard (staff, desktop) in devices and layout",
+        "Locale is handled for Indonesia (id-ID dates, Indonesian copy)",
+        "No competitor branding, logos, or copy were copied into the project",
+        "UI implementation follows the brief and uses the frontend-design skill; theme values live in apps/web/src/theme/"
+      ]
     }
   ]
 }

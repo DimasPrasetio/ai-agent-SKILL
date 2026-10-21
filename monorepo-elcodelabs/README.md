@@ -90,6 +90,7 @@ monorepo-elcodelabs/
 │   ├── backend-nestjs.md
 │   ├── backend-express.md
 │   ├── frontend.md
+│   ├── design-research.md         # research how this app type is ideally designed, before any UI
 │   ├── api-standard.md
 │   └── docker-deployment.md       # deploy standard for the elcodelabs VPS
 ├── scripts/

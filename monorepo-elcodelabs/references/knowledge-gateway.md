@@ -98,6 +98,7 @@ knowledge/
 ├── API.md                # endpoint list and API conventions specific to this project
 ├── DATABASE.md           # tables, fields, ownership per module, relations as primitive IDs
 ├── FRONTEND.md           # frontend conventions specific to this project
+├── DESIGN.md             # design brief: researched UI direction for this app type + dated sources
 ├── BACKEND.md            # backend conventions specific to this project
 ├── DEPLOYMENT.md         # elcodelabs VPS facts (slug, port, DB, image, domain), release + first-time setup
 └── decisions/            # Architecture Decision Records (ADRs)

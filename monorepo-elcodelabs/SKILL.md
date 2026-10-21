@@ -1,6 +1,6 @@
 ---
 name: monorepo-elcodelabs
-description: Use this skill whenever the user asks to create, scaffold, generate, bootstrap, plan, audit, or restructure a monorepo project. Enforces Dimas' locked monorepo standard — apps/web (React 19 + Tailwind 4) frontend, apps/api modular-monolith backend (Go / NestJS / Express i.e. plain Node.js), strict contracts-only module boundaries, a Claude Code knowledge gateway, /api/v1 conventions, and deployment to the elcodelabs VPS (one image/one container built in CI → GHCR and only pulled by the server, host-level shared MySQL with one DB + user per app, unique 127.0.0.1 port behind host nginx + certbot). Also use it to prepare or audit a project's deploy setup for the elcodelabs VPS. Trigger this even when the user only says "buatkan project", "setup fullstack repo", "new backend + frontend project", or names a stack like "Go + React monorepo" without saying the word "monorepo".
+description: Use this skill whenever the user asks to create, scaffold, bootstrap, plan, audit, or restructure a monorepo, or to prepare or audit its deploy to the elcodelabs VPS. Enforces Dimas' locked standard — apps/web (React 19 + Tailwind 4), apps/api modular monolith (Go / NestJS / Express i.e. plain Node.js) with contracts-only module boundaries, a Claude Code knowledge gateway, /api/v1 conventions, and elcodelabs deployment (one image built in CI → GHCR and only pulled by the server, host-level shared MySQL with one DB + user per app, unique 127.0.0.1 port behind host nginx + certbot). Before any frontend UI it researches on the internet how that kind of app (POS, ERP, booking, dashboard, landing page…) is ideally designed today and writes a design brief first. Trigger even when the user only says "buatkan project", "setup fullstack repo", "new backend + frontend project", or names a stack like "Go + React monorepo" without the word "monorepo".
 ---
 
 # Dimas Monorepo Standard
@@ -55,8 +55,9 @@ The standard is intentionally anti-overengineering: a modular monolith with clea
    If the target directory already has files in it (e.g. an existing `.git/`), add `--force`.
 
    Run `node scripts/scaffold.mjs --help` for options. After scaffolding, read the relevant reference file(s) below and fill in project-specific code, modules, and `knowledge/` content.
-2. **For auditing/restructuring an existing repo**, skip the script and check the repo against the [Final Checklist](#final-checklist) plus the relevant references.
-3. **For deploy work on an existing repo** (preparing or fixing its elcodelabs deploy), compare it with what the scaffolder emits under `infra/`, `.github/workflows/`, `knowledge/DEPLOYMENT.md`, and `.claude/rules/deployment.md` — scaffold a throwaway copy with the same flags and diff against it.
+2. **Before building any UI, research the design** — follow [references/design-research.md](references/design-research.md): pin down the app type, users, primary device, and locale; research current sources on the internet (real products of that app type, a fitting design system, UX research); write the brief into `knowledge/DESIGN.md`; then build the screens through `frontend-design` from that brief. Never start UI from a generic template or from memory alone. Not needed when only restyling or fixing a screen the brief already covers.
+3. **For auditing/restructuring an existing repo**, skip the script and check the repo against the [Final Checklist](#final-checklist) plus the relevant references.
+4. **For deploy work on an existing repo** (preparing or fixing its elcodelabs deploy), compare it with what the scaffolder emits under `infra/`, `.github/workflows/`, `knowledge/DEPLOYMENT.md`, and `.claude/rules/deployment.md` — scaffold a throwaway copy with the same flags and diff against it.
 
 ## Read the right reference
 
@@ -70,6 +71,7 @@ The body below is the always-loaded summary. Detailed, stack-specific rules live
 | NestJS backend (Prisma, watch) | [references/backend-nestjs.md](references/backend-nestjs.md) |
 | Express backend (nodemon) | [references/backend-express.md](references/backend-express.md) |
 | Frontend `apps/web` (React 19, Zustand, Zod, Axios, theme) | [references/frontend.md](references/frontend.md) |
+| Design research before UI: what to research, source quality, the `knowledge/DESIGN.md` brief | [references/design-research.md](references/design-research.md) |
 | API conventions + env standard | [references/api-standard.md](references/api-standard.md) |
 | Deployment: Docker image, CI → GHCR, elcodelabs VPS (compose, deploy.sh, nginx, MySQL) | [references/docker-deployment.md](references/docker-deployment.md) |
 
@@ -132,7 +134,7 @@ Forbidden as the default dev workflow: `go run main.go`, `node server.js`, produ
 ## Backend & Frontend (summary)
 
 - **Backend** is always a Modular Monolith. Each module exposes only `contracts/` as its public boundary; cross-module service/repository/domain imports, cross-module DB joins, and cross-module foreign keys are forbidden. Full rules: [references/backend-modular-monolith.md](references/backend-modular-monolith.md).
-- **Frontend** is React 19 + Tailwind 4 with react-router-dom (lazy routes), Zustand, Zod, Axios, and the `@/*` alias; theme color is centralized. Use the `frontend-design` skill as the UI authority — if it isn't installed, install it first from the source in [references/frontend.md](references/frontend.md) rather than skipping it. Full rules: [references/frontend.md](references/frontend.md).
+- **Frontend** is React 19 + Tailwind 4 with react-router-dom (lazy routes), Zustand, Zod, Axios, and the `@/*` alias; theme color is centralized. Use the `frontend-design` skill as the UI authority — if it isn't installed, install it first from the source in [references/frontend.md](references/frontend.md) rather than skipping it. Full rules: [references/frontend.md](references/frontend.md). Before the first UI, research how this kind of app is ideally designed today and write the brief to `knowledge/DESIGN.md` — [references/design-research.md](references/design-research.md).
 
 ## Deployment (summary)
 
@@ -173,7 +175,8 @@ Before delivering the structure or changing code, verify:
 - Backend watcher fixed by stack? Migration tool fixed for Go/NestJS (asked for Express)?
 - For Go: golang-migrate, sqlc, `database/sql` — not GORM?
 - Frontend uses React 19, Tailwind 4, react-router-dom, lazy routes, Zustand, Zod, Axios, `@/*`?
-- `frontend-design` used for UI? Shared components domain-agnostic? Theme centralized?
+- Design researched before UI — current, dated sources (real products + design system + UX research) recorded with findings and direction in `knowledge/DESIGN.md`?
+- `frontend-design` used for UI, working from that brief? Shared components domain-agnostic? Theme centralized?
 - Root commands `npm run dev:web` and `npm run dev:api` are separate?
 - Docker defaults to one app container + host-level database?
 - Deploy facts settled (slug, port from the playbook, GHCR owner, domain) — or left as markers on purpose?

@@ -208,6 +208,10 @@ const FACT_OWNERS = {
   "default_server": [".claude/rules/deployment.md"],
   "mysql_native_password": ["knowledge/DEPLOYMENT.md"],
   "SERVER_PLAYBOOK.md": ["knowledge/DEPLOYMENT.md"],
+  // Design: the rule owns "research before UI", DESIGN.md owns the researched direction.
+  "Research date:": ["knowledge/DESIGN.md"],
+  "WCAG 2.2": ["knowledge/DESIGN.md"],
+  "older than ~6 months": [".claude/rules/frontend-react.md"],
 };
 for (const backend of ["go", "nestjs", "express"]) {
   try {

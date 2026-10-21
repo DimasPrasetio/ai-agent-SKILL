@@ -15,6 +15,10 @@ Axios
 
 Do **not** use by default: TanStack Query / Router / Table, Redis, Memcache. Use simple/static data patterns unless the user explicitly asks for advanced server-state, caching, or table libraries.
 
+**Research first.** Before generating UI for a new project or a new screen type, do the design
+research in [design-research.md](design-research.md) and write the brief to `knowledge/DESIGN.md`;
+`frontend-design` then works from that brief.
+
 When generating frontend UI inside `apps/web`, use the Claude skill named `frontend-design` as the UI/design authority — it drives aesthetic direction, typography, and layout so the result doesn't read as a templated default.
 
 If `frontend-design` is not available (the skill isn't installed), **install it first, then use it** — do not silently skip it. It is an official Anthropic skill.

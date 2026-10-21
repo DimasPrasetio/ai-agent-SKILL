@@ -360,6 +360,7 @@ own scope in its header, so the labels below stay short on purpose.
 - [API.md](API.md) — endpoints
 - [DATABASE.md](DATABASE.md) — schema & table ownership
 - [FRONTEND.md](FRONTEND.md) — frontend conventions
+- [DESIGN.md](DESIGN.md) — design brief: researched UI direction & sources
 - [BACKEND.md](BACKEND.md) — backend conventions
 - [DEPLOYMENT.md](DEPLOYMENT.md) — run, build, deploy, env
 - [decisions/](decisions/) — ADRs
@@ -400,6 +401,35 @@ Keep the two in sync — if they disagree, report the conflict, don't pick one.
 file("knowledge/GLOSSARY.md", kStub("Glossary", "Shared terminology used across the project."));
 file("knowledge/API.md", kDelta("API", "Endpoints this project exposes.", "api-standard.md"));
 file("knowledge/DATABASE.md", kDelta("Database", "Tables, fields, and which module owns each.", "database.md"));
+file("knowledge/DESIGN.md", `# Design Brief — ${name}
+
+> What the UI of this project should look like and why — the result of researching how this
+> kind of app is ideally and commonly designed today. Read it before building or reshaping a
+> screen. This file owns the design direction; other files point here instead of restating it.
+
+Status: NOT RESEARCHED YET — research before the first UI work (\`.claude/rules/frontend-react.md\`).
+Research date: _TODO (YYYY-MM-DD)_
+App type & users: _TODO — e.g. "POS for cashiers on a counter tablet", "multi-branch back office"_
+Primary device: _TODO_ · Locale: id-ID (Rupiah, Indonesian dates and copy) unless stated otherwise
+
+## Findings — how this kind of app is ideally and commonly designed
+_TODO: navigation model, key screens and their layout patterns, data density, interaction
+patterns users already expect, where the market leaders converge and where they differ._
+
+## Design direction for this project
+- Layout & navigation: _TODO_
+- Key screens (purpose → pattern): _TODO_
+- Components that matter most: _TODO_
+- Visual direction (type, color, density, tone): _TODO_ — the values live in \`apps/web/src/theme/\`
+- Devices & breakpoints (primary first): _TODO_
+- Accessibility target: WCAG 2.2 AA
+
+## Anti-patterns to avoid
+_TODO_
+
+## Sources
+_TODO: one line each — title, URL, type (real product / design system / UX research / gallery), date accessed._
+`);
 file("knowledge/FRONTEND.md", kDelta("Frontend", "Frontend structure and screens specific to this project.", "frontend-react.md"));
 file("knowledge/BACKEND.md", kDelta("Backend", "Backend structure and modules specific to this project.", "backend-modular-monolith.md"));
 file("knowledge/DEPLOYMENT.md", `# Deployment — ${name}
@@ -577,6 +607,11 @@ Applies to: \`apps/web/**\`.
 - Validation: Zod schemas in \`modules/<m>/schemas\`. Prefer \`z.infer\` over manual form types.
 - HTTP: all requests go through \`shared/services/http-client.ts\` (one Axios instance).
 - Use the \`@/*\` import alias. Centralize theme color in \`src/theme/\`.
+- Before building or reshaping UI, read \`knowledge/DESIGN.md\`. If it is not researched yet, is
+  older than ~6 months, or doesn't cover the screen type at hand, first research current sources
+  on the internet (real products of this app type, a fitting design system, UX research) and
+  record findings, direction, and dated sources there. Extract patterns — never copy another
+  product's branding, assets, or exact layout.
 - Shared UI components must be domain-agnostic. Use the \`frontend-design\` skill for UI; if it isn't installed, install it first from https://github.com/anthropics/skills/tree/main/skills/frontend-design (do not skip it).
 `);
 file(".claude/rules/database.md", `# Rule: Database
