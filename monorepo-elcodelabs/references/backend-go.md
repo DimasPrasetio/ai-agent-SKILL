@@ -43,7 +43,7 @@ Rules:
     "build:api": "cd apps/api && go build -o ../../dist/api ./cmd/server",
     "migrate:up": "node scripts/migrate.mjs up",
     "migrate:down": "node scripts/migrate.mjs down 1",
-    "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations -seq",
+    "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations",
     "sqlc:generate": "cd apps/api && sqlc generate"
   }
 }
@@ -86,41 +86,137 @@ Never drop the `.exe` from `cmd`/`bin` to make it "look Unix": air applies its W
 `.exe` handling only to `full_bin`, not to `bin`, so on Windows a suffix-less binary is built
 and then never runs — `npm run dev:api` just exits.
 
-## Recommended Go structure
+## Go structure
 
 ```txt
 apps/api/
 ├── cmd/
 │   └── server/
-│       └── main.go
+│       └── main.go            # assembles config → logger → database → kernel.Deps → server
 ├── internal/
-│   ├── config/
-│   ├── database/
-│   │   ├── db.go
-│   │   └── sqlc.go
-│   ├── modules/
-│   │   ├── auth/
-│   │   ├── users/
-│   │   └── order/
-│   │       ├── contracts/
-│   │       ├── application/
-│   │       ├── domain/
-│   │       │   └── events/
-│   │       ├── infrastructure/
-│   │       │   ├── queries/
-│   │       │   │   └── order.sql
-│   │       │   ├── sqlc/
-│   │       │   └── repository.go
-│   │       ├── presentation/
-│   │       └── order.module.go
-│   ├── router/
-│   ├── server/
-│   └── shared/
+│   ├── config/                # config.Load(), Get, Require
+│   ├── database/              # Open (pool, parseTime), Ping
+│   ├── kernel/                # Deps + Version — the contract modules build against
+│   ├── server/                # health, /readyz, JSON 404, SPA, middleware
+│   ├── shared/
+│   │   ├── apperror/          # the client-facing error type
+│   │   ├── logger/            # slog setup + request-scoped logger
+│   │   ├── pagination/        # ?page=&limit= → Params, Meta
+│   │   ├── request/           # DecodeJSON, PathInt64
+│   │   ├── response/          # OK, Created, Paginated, Fail, Error — the envelope
+│   │   └── validator/         # field-by-field input errors
+│   └── modules/
+│       ├── registry.go        # the one place modules are wired (elco:* markers)
+│       └── order/             # example module
+│           ├── contracts/
+│           ├── application/
+│           ├── domain/
+│           │   └── events/
+│           ├── infrastructure/
+│           │   ├── queries/
+│           │   │   └── order.sql
+│           │   ├── sqlc/
+│           │   └── repository.go
+│           ├── presentation/
+│           └── order.module.go
 ├── migrations/
-│   ├── 000001_create_users_table.up.sql
-│   └── 000001_create_users_table.down.sql
+│   ├── 20261024093000_baseline.up.sql
+│   ├── 20261024093000_baseline.down.sql
+│   ├── 20261102101500_create_orders_table.up.sql
+│   └── 20261102101500_create_orders_table.down.sql
 ├── sqlc.yaml
 ├── .air.toml
 ├── go.mod
 └── go.sum
 ```
+
+The scaffold creates everything above except the example module: a Go project starts with no
+domain modules, and each one is built or installed from the module library through the
+registry. The kernel files are copied from this skill's `scripts/templates/go/` — read them
+there for the full code.
+
+## The kernel
+
+`internal/config`, `database`, `kernel`, `server`, and `shared/` are the **kernel**: the stable
+surface every module — hand-written or from the module library — is built against.
+
+- **`kernel.Deps`** (`Config`, `DB`, `Log`) is what a module's `New` receives. A module keeps
+  what it needs and never reaches for globals.
+- **`kernel.Version`** is the contract version. A library module states the version it needs
+  (`requires_kernel` in its `module.yaml`). Bump it only for a change that would break an
+  existing module; adding something is not one.
+- **Settings**: `config.Config` holds only what the kernel needs (`APP_ENV`, `APP_PORT`,
+  `APP_NAME`, `DB_DSN`, `PUBLIC_DIR`). A module reads its own settings with `config.Get` or
+  `config.Require` in its `New`, so a missing required value stops the API at startup.
+- **Database**: `database.Open` sets `parseTime` (sqlc scans DATETIME into `time.Time`) without
+  putting it in `DB_DSN`, which golang-migrate also reads. It does not dial — the API starts
+  while MySQL is down, and `/readyz` answers 503 until it is reachable. That is what the image
+  HEALTHCHECK and `deploy.sh` wait on.
+- **Responses** go through `shared/response` only: `OK`, `Created`, `Paginated`, `Fail`, and
+  `Error(w, r, err)`. A handler returns client errors as `*apperror.Error` (`BadRequest`,
+  `NotFound`, `Validation`, …); any other error becomes a logged, generic 500, so internals
+  never leak.
+- **Input**: `request.DecodeJSON` (1 MiB cap, unknown fields rejected), `request.PathInt64`,
+  `pagination.FromRequest`, and `validator.Validator`, which collects every field error into
+  one 422.
+- **Server**: `http.ServeMux` (Go 1.22+ method patterns such as `"GET /api/v1/orders/{id}"`),
+  an unknown `/api/` path answers a JSON 404 instead of the SPA, and every request gets an
+  `X-Request-ID` plus a logger carrying it (`logger.From(r.Context())`). Panics become a 500
+  envelope. `SIGTERM` (`docker stop`) drains in-flight requests before exit.
+- `shared/apperror` is not named `errors` so it never shadows the standard library package.
+
+## Module contract and the registry
+
+A module's package root (`internal/modules/<name>/<name>.module.go`) exposes:
+
+```go
+// New builds the module. It takes kernel.Deps plus the contracts of the modules it calls.
+func New(d *kernel.Deps, users userscontracts.UserClient) *Module
+
+// Routes mounts the module's HTTP handlers.
+func (m *Module) Routes(mux *http.ServeMux)
+
+// Client returns the module's public contract — only for a module other modules call.
+func (m *Module) Client() contracts.OrderClient
+```
+
+`internal/modules/registry.go` is the one place modules are wired. Each module is built and
+mounted in dependency order — a provider before every module whose `New` takes its contract —
+so the compiler checks the wiring:
+
+```go
+func Register(mux *http.ServeMux, d *kernel.Deps) {
+	// elco:modules:begin
+	usersModule := users.New(d)
+	usersModule.Routes(mux)
+	authModule := auth.New(d, usersModule.Client())
+	authModule.Routes(mux)
+	// elco:modules:end
+}
+```
+
+The module's import goes between `// elco:imports:begin` and `// elco:imports:end`. Keep every
+`elco:*` marker: the module library's installer inserts lines between them.
+
+## Migrations and sqlc per module
+
+- Migrations are **timestamp-versioned** (`npm run migrate:create -- <name>` →
+  `<yyyymmddhhmmss>_<name>.up.sql`), so migrations added on two branches never collide. A
+  module's migrations create only the tables it owns.
+- The scaffold ships a no-op `<timestamp>_baseline` migration: golang-migrate fails `up` on an
+  empty directory, which would break the first deploy.
+- Each module adds its own `sql:` block to `sqlc.yaml`, between `# elco:sqlc:begin` and
+  `# elco:sqlc:end`:
+
+  ```yaml
+    - engine: "mysql"
+      schema: "migrations"
+      queries: "internal/modules/order/infrastructure/queries"
+      gen:
+        go:
+          package: "sqlc"
+          out: "internal/modules/order/infrastructure/sqlc"
+  ```
+
+  sqlc refuses a config with no block at all ("no packages"), so `npm run sqlc:generate` only
+  works once the first module is in.

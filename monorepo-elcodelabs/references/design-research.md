@@ -21,6 +21,17 @@ in a vacuum.
 | The app type or the target users change | **Yes** |
 | Restyling, fixing, or extending an existing screen within the brief | No — follow the brief |
 
+### Starting from a preset
+
+A preset is a researched, ready-made visual direction kept in the module library (token values
+and fonts for `theme.css` — see [frontend.md](frontend.md#presets)), e.g. `bingkai-navy` for
+dense back-office apps. When the app type clearly matches a preset, the full research shrinks
+to a check: confirm the preset still fits this app's users, device, and key jobs, then record
+in the brief `Preset: <name>` plus only what this project changes (brand color, density,
+screens the preset doesn't cover). A screen type outside the preset still gets targeted
+research. A preset never replaces research for an app type it wasn't made for — a POS on a
+counter tablet is not a back office just because both show tables.
+
 ## Step 1 — Pin down what is being designed
 
 Before searching, write down (ask the user only for what can't be inferred):
@@ -96,8 +107,10 @@ The scaffolder creates `knowledge/DESIGN.md` with these sections; replace the TO
 - **Design direction for this project** — the decisions taken from those findings: layout &
   navigation, key screens (purpose → pattern), the components that matter most, visual
   direction (type, color, density, tone), devices & breakpoints with the primary device first,
-  accessibility target, locale. Color and type *values* belong in `apps/web/src/theme/` — the
-  brief states the direction and points there.
+  accessibility target, locale. Color and type *values* belong in
+  `apps/web/src/theme/theme.css` (token values only — the token names are fixed, see
+  [frontend.md](frontend.md#theme-the-token-contract)); the brief states the direction and
+  points there. If the direction starts from a preset, name it on the `Preset:` line.
 - **Anti-patterns to avoid** — what the research showed users dislike or what fails for this
   app type.
 - **Sources** — one line each: title, URL, type (real product / design system / UX research /
@@ -119,4 +132,5 @@ code and the brief silently disagree.
 - Real products, a fitting design system, and UX research all consulted — fresh, dated sources?
 - `knowledge/DESIGN.md` filled: findings, direction, anti-patterns, sources; status no longer TODO?
 - Patterns extracted, nothing copied (brand, assets, copy, exact layouts)?
-- UI built through `frontend-design` from the brief, with theme values in `src/theme/`?
+- UI built through `frontend-design` from the brief, with theme values in `src/theme/theme.css`
+  and only semantic classes in components?

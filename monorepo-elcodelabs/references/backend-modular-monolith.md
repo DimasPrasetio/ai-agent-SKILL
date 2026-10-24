@@ -77,11 +77,15 @@ Backend `shared/` contains only technical utilities — never domain logic.
 shared/
 ├── errors/
 ├── response/
+├── request/
 ├── logger/
 ├── validator/
 ├── pagination/
 └── utils/
 ```
+
+(Go names the error package `apperror/` so it never shadows the standard library's `errors`.
+The Go kernel and its module contract are in [backend-go.md](backend-go.md#the-kernel).)
 
 Do not put order/product/payment/customer business rules in `shared/`.
 

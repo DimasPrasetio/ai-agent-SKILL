@@ -1,0 +1,94 @@
+package server
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
+	"net/http"
+	"regexp"
+	"runtime/debug"
+	"strings"
+	"time"
+
+	"__GO_MODULE__/internal/shared/logger"
+	"__GO_MODULE__/internal/shared/response"
+)
+
+// chain wraps h so the first middleware listed runs first.
+func chain(h http.Handler, mw ...func(http.Handler) http.Handler) http.Handler {
+	for i := len(mw) - 1; i >= 0; i-- {
+		h = mw[i](h)
+	}
+	return h
+}
+
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+// requestID gives every request an X-Request-ID (kept from the client when it is sane) and
+// a logger carrying it, available to handlers through logger.From(r.Context()).
+func requestID(base *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id := r.Header.Get("X-Request-ID")
+			if !validRequestID.MatchString(id) {
+				b := make([]byte, 8)
+				_, _ = rand.Read(b)
+				id = hex.EncodeToString(b)
+			}
+			w.Header().Set("X-Request-ID", id)
+			ctx := logger.WithContext(r.Context(), base.With("request_id", id))
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// statusRecorder remembers the status a handler wrote.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// logRequests logs one line per API call. Static files and the readiness probe — polled
+// every 30s by the HEALTHCHECK — are left out to keep the log readable.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		logger.From(r.Context()).Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	})
+}
+
+// recoverPanics turns a panicking handler into a 500 envelope and logs the stack, so one
+// bad request never takes the process down.
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if v := recover(); v != nil {
+				if v == http.ErrAbortHandler {
+					panic(v)
+				}
+				logger.From(r.Context()).Error("panic", "value", v, "stack", string(debug.Stack()))
+				response.Fail(w, http.StatusInternalServerError, "Internal server error", nil)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}

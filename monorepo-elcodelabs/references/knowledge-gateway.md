@@ -157,6 +157,7 @@ Recommended files:
 ├── frontend-react.md
 ├── database.md
 ├── api-standard.md
+├── modules.md         # registries, elco:* markers, module contract, customizing installed modules
 └── deployment.md      # infra/**, .github/workflows/**: elcodelabs VPS deploy rules
 ```
 

@@ -1,0 +1,23 @@
+// Package kernel is the stable surface every backend module is built against: what a module
+// receives (Deps) and the shared/ packages it may import. Library modules state the kernel
+// version they need (requires_kernel in module.yaml). Bump Version only for a change that
+// would break an existing module — adding something new is not one.
+package kernel
+
+import (
+	"database/sql"
+	"log/slog"
+
+	"__GO_MODULE__/internal/config"
+)
+
+// Version is the kernel contract version.
+const Version = 1
+
+// Deps is what a module's New receives. A module keeps what it needs from it and never
+// reaches for globals instead.
+type Deps struct {
+	Config *config.Config
+	DB     *sql.DB
+	Log    *slog.Logger
+}

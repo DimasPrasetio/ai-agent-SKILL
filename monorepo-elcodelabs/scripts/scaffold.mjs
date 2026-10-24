@@ -14,9 +14,14 @@
 //   --force              write into a non-empty directory
 //   --help               show this help
 
-import { mkdirSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+// Files that are code rather than per-project text (the Go kernel, the shadcn primitives)
+// live as real files under scripts/templates/ and are copied with placeholder substitution.
+const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), "templates");
 
 const BACKENDS = new Set(["go", "nestjs", "express"]);
 
@@ -128,6 +133,11 @@ const files = {};   // relativePath -> content
 const keepDirs = []; // directories to create with a .gitkeep
 const file = (p, content) => { files[p] = content; };
 const keep = (...dirs) => keepDirs.push(...dirs);
+const template = (src, dest, vars = {}) => {
+  let content = readFileSync(join(TEMPLATES, src), "utf8");
+  for (const [k, v] of Object.entries(vars)) content = content.replaceAll(k, v);
+  file(dest, content);
+};
 
 const goModule = name.replace(/[^a-zA-Z0-9._/-]/g, "-").toLowerCase();
 // npm package names have their own rules: lowercase, no spaces.
@@ -136,6 +146,9 @@ const npmName = name
   .replace(/[^a-z0-9._-]+/g, "-")
   .replace(/^[-_.]+|[-_.]+$/g, "") || "app";
 const isNodeBackend = backend === "nestjs" || backend === "express";
+// Go starts with no domain modules: each is built or installed from the module library
+// through internal/modules/registry.go. The Node stacks keep placeholder module folders.
+const starterApiModules = backend === "go" ? [] : ["auth", "users", "order"];
 
 // Values missing at scaffold time become loud markers rather than guesses: a wrong port
 // collides with another app on the shared VPS, a wrong owner pulls the wrong image.
@@ -164,7 +177,7 @@ const rootScripts = {
     "build:api": "cd apps/api && go build -o ../../dist/api ./cmd/server",
     "migrate:up": "node scripts/migrate.mjs up",
     "migrate:down": "node scripts/migrate.mjs down 1",
-    "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations -seq",
+    "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations",
     "sqlc:generate": "cd apps/api && sqlc generate",
   },
   nestjs: {
@@ -323,7 +336,9 @@ the two ever disagree, the rules file wins and the drift is a finding to report.
 - Backend is a **modular monolith**. A module exposes only \`contracts/\` to other modules.
   No cross-module service/repository/domain imports, no cross-module DB joins or foreign keys.
 - Cross-module relations are stored as primitive IDs and resolved via module clients.
-- Frontend uses the \`@/*\` alias, lazy routes, Zustand, Zod, Axios. Theme color is centralized.
+- Frontend uses the \`@/*\` alias, lazy routes, Zustand, Zod, Axios. UI is built from shadcn/ui
+  primitives and semantic theme tokens — never raw colors.
+- A module is wired in only through its registry, between the \`elco:*\` markers.
 - Deploy = one image, one container on the elcodelabs VPS, built in CI and only pulled by the
   server; the database is the host's shared MySQL. Rules: \`.claude/rules/deployment.md\`.
 
@@ -387,9 +402,9 @@ file("knowledge/MODULE_MAP.md", `# Module Map
 
 | Module | Responsibility | Public contract | Owned tables | External integrations |
 |---|---|---|---|---|
-| auth | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| users | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| order | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+${starterApiModules.length
+  ? starterApiModules.map((m) => `| ${m} | _TODO_ | _TODO_ | _TODO_ | _TODO_ |`).join("\n")
+  : "| _none yet_ | | | | |"}
 
 _TODO: fill in for ${name}. Fill all five columns — "Owned tables" and "External integrations"
 are what let a later analysis catch a cross-module join, or a secondary integration a
@@ -420,7 +435,9 @@ patterns users already expect, where the market leaders converge and where they 
 - Layout & navigation: _TODO_
 - Key screens (purpose → pattern): _TODO_
 - Components that matter most: _TODO_
-- Visual direction (type, color, density, tone): _TODO_ — the values live in \`apps/web/src/theme/\`
+- Preset: _none_ — or the module-library theme preset this direction starts from (e.g.
+  \`bingkai-navy\` for back-office apps); then record only the deviations from it below
+- Visual direction (type, color, density, tone): _TODO_ — the values live in \`apps/web/src/theme/theme.css\`
 - Devices & breakpoints (primary first): _TODO_
 - Accessibility target: WCAG 2.2 AA
 
@@ -596,8 +613,35 @@ Applies to: \`apps/api/**\`.
 - Forbidden: cross-module DB joins and cross-module foreign keys.
 - Cross-module relations are primitive IDs; resolve via module clients.
 - Transactions are scoped inside a single module; orchestrate cross-module flows via app services.
-- \`shared/\` holds only technical utilities (errors, response, logger, validator, pagination, utils) — never domain logic.
+- \`shared/\` holds only technical utilities (errors, response, request, logger, validator, pagination, utils) — never domain logic.
 `);
+// Registries and markers are what the module library installs into (references/backend-go.md,
+// references/frontend.md). The backend registry exists for Go only, so far.
+const goModuleRules = backend === "go" ? [
+  "- Go: a module's package root exposes `New(d *kernel.Deps, <the contracts it needs>...)`,",
+  "  `Routes(mux *http.ServeMux)`, and `Client()` when it provides a contract. In `registry.go` a",
+  "  provider comes before every module whose `New` takes its contract.",
+  "- Go: a module owns its `sql:` block in `sqlc.yaml` and adds migrations with",
+  "  `npm run migrate:create` (timestamp-versioned, so two branches never collide).",
+  "- Go: `internal/kernel` and `internal/shared` are the kernel every module builds on. Change them",
+  "  only while every module still builds, and bump `kernel.Version` for a change that would",
+  "  break an existing module.",
+] : [];
+file(".claude/rules/modules.md", [
+  "# Rule: Modules and registries",
+  "",
+  `Applies to: ${backend === "go" ? "`apps/api/internal/**`, `apps/api/sqlc.yaml`, " : ""}\`apps/web/src/modules/**\`, \`apps/web/src/app/routes/**\`.`,
+  "",
+  backend === "go"
+    ? "- A module is wired in only through its registry: `apps/api/internal/modules/registry.go`\n  (backend) and `apps/web/src/app/routes/modules.ts` (frontend). Never mount its routes elsewhere."
+    : "- A frontend module is wired in only through `apps/web/src/app/routes/modules.ts`. Never mount\n  its routes elsewhere.",
+  "- Keep every `elco:*` marker. Tooling inserts lines between them — add yours between them too,",
+  "  never around or instead of them.",
+  ...goModuleRules,
+  "- Customize an installed module in new files of its own (e.g. `custom_*.go`, `Custom*.tsx`)",
+  "  rather than editing the files it shipped with, so a later upgrade merges cleanly.",
+  "",
+].join("\n"));
 file(".claude/rules/frontend-react.md", `# Rule: Frontend (React)
 
 Applies to: \`apps/web/**\`.
@@ -606,7 +650,14 @@ Applies to: \`apps/web/**\`.
 - State: Zustand (global in \`shared/stores\`, module state in \`modules/<m>/stores\`).
 - Validation: Zod schemas in \`modules/<m>/schemas\`. Prefer \`z.infer\` over manual form types.
 - HTTP: all requests go through \`shared/services/http-client.ts\` (one Axios instance).
-- Use the \`@/*\` import alias. Centralize theme color in \`src/theme/\`.
+- Use the \`@/*\` import alias.
+- UI foundation is shadcn/ui on Radix: primitives in \`shared/components/primitives\` (add more with
+  \`npx shadcn@latest add <name>\`), generic compositions in \`shared/components/ui\`, page patterns
+  in \`shared/components/patterns\`. Merge classes with \`cn\` from the \`cn\` package.
+- Color, type, radius, and elevation come only from \`src/theme/theme.css\`, through semantic
+  classes (\`bg-card\`, \`text-muted-foreground\`, \`border-border\`, \`text-destructive\`, …). No raw
+  colors in components (hex, \`bg-blue-600\`, \`text-[#…]\`). Token names are a contract: change
+  their values, never rename or remove one.
 - Before building or reshaping UI, read \`knowledge/DESIGN.md\`. If it is not researched yet, is
   older than ~6 months, or doesn't cover the screen type at hand, first research current sources
   on the internet (real products of this app type, a fitting design system, UX research) and
@@ -621,7 +672,7 @@ Applies to: \`apps/api/**\`.
 - A repository accesses only the tables its own module owns.
 - Cross-module boundary rules (no joins, no foreign keys, relations as primitive IDs) are
   authoritative in \`backend-modular-monolith.md\` — not restated here.
-${backend === "go" ? "- Go: golang-migrate for migrations, sqlc for access, database/sql + MySQL driver. Not GORM.\n" : ""}${backend === "nestjs" ? "- NestJS: Prisma migrations (not TypeORM unless explicitly requested).\n" : ""}${backend === "express" ? "- Express: migration tool is not locked — confirm the choice before implementing migrations.\n" : ""}`);
+${backend === "go" ? "- Go: golang-migrate for migrations (timestamp-versioned), sqlc for access (one generated package\n  per module), database/sql + MySQL driver. Not GORM.\n" : ""}${backend === "nestjs" ? "- NestJS: Prisma migrations (not TypeORM unless explicitly requested).\n" : ""}${backend === "express" ? "- Express: migration tool is not locked — confirm the choice before implementing migrations.\n" : ""}`);
 file(".claude/rules/deployment.md", `# Rule: Deployment (elcodelabs VPS)
 
 Applies to: \`infra/**\`, \`.github/workflows/**\`, \`docker-compose.yml\`, \`.dockerignore\`.
@@ -1164,14 +1215,18 @@ file("packages/api-contract/README.md", `# API Contract\n\nOpenAPI / schema / AP
 file("apps/web/package.json", JSON.stringify({
   name: "web", private: true, version: "0.1.0", type: "module",
   scripts: { dev: "vite", build: "tsc --noEmit && vite build", preview: "vite preview" },
+  // Alphabetical, as npm and the shadcn CLI rewrite them — so `shadcn add` shows up in a
+  // diff as the one dependency it added. The shadcn/ui foundation is radix-ui,
+  // class-variance-authority, cn, lucide-react, and tw-animate-css (references/frontend.md);
+  // anything beyond it arrives with the module or preset that needs it.
   dependencies: {
-    react: "^19.0.0", "react-dom": "^19.0.0", "react-router-dom": "^7.0.0",
-    zustand: "^5.0.0", zod: "^3.23.0", axios: "^1.7.0",
+    axios: "^1.7.0", "class-variance-authority": "^0.7.1", cn: "^0.4.0",
+    "lucide-react": "^1.43.0", "radix-ui": "^1.8.1", react: "^19.0.0", "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0", "tw-animate-css": "^1.4.0", zod: "^3.23.0", zustand: "^5.0.0",
   },
   devDependencies: {
-    "@vitejs/plugin-react": "^4.3.0", vite: "^6.0.0", typescript: "^5.6.0",
-    tailwindcss: "^4.0.0", "@tailwindcss/vite": "^4.0.0",
-    "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0",
+    "@tailwindcss/vite": "^4.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0", tailwindcss: "^4.0.0", typescript: "^5.6.0", vite: "^6.0.0",
   },
 }, null, 2) + "\n");
 
@@ -1222,6 +1277,24 @@ file("apps/web/tsconfig.json", JSON.stringify({
 }, null, 2) + "\n");
 
 file("apps/web/eslint.config.js", `// Configure ESLint for the frontend as needed.\nexport default [];\n`);
+// shadcn CLI config: \`npx shadcn@latest add <component>\` drops primitives straight into
+// shared/components/primitives, wired to theme.css. cn() is the "cn" package (shadcn's
+// replacement for clsx + tailwind-merge), which is what the CLI writes into every component.
+file("apps/web/components.json", JSON.stringify({
+  $schema: "https://ui.shadcn.com/schema.json",
+  style: "new-york",
+  rsc: false,
+  tsx: true,
+  tailwind: { config: "", css: "src/theme/theme.css", baseColor: "neutral", cssVariables: true, prefix: "" },
+  iconLibrary: "lucide",
+  aliases: {
+    components: "@/shared/components",
+    utils: "cn",
+    ui: "@/shared/components/primitives",
+    lib: "@/shared/lib",
+    hooks: "@/shared/hooks",
+  },
+}, null, 2) + "\n");
 file("apps/web/src/vite-env.d.ts", `/// <reference types="vite/client" />\n`);
 
 file("apps/web/src/main.tsx", `import { StrictMode } from "react";
@@ -1269,45 +1342,93 @@ export function RouterProvider() {
 }
 `);
 
+// App-level paths only. A module owns its own paths in its routes.tsx, so installing a
+// module never edits this file.
 file("apps/web/src/app/routes/route-paths.ts", `export const ROUTE_PATHS = {
   home: "/",
-  login: "/login",
-  dashboard: "/dashboard",
+  /** Where "/" sends a visitor. */
+  start: "/dashboard",
 } as const;
 `);
 
-file("apps/web/src/app/routes/public.routes.tsx", `import { lazy } from "react";
+file("apps/web/src/shared/types/module-routes.ts", `import type { RouteObject } from "react-router-dom";
+
+/** What a frontend module exports from its routes.tsx. Pages must be lazy-loaded. */
+export interface ModuleRoutes {
+  /** Reachable without signing in. */
+  public?: RouteObject[];
+  /** Behind the auth guard once an auth module provides one. */
+  protected?: RouteObject[];
+}
+`);
+
+file("apps/web/src/app/routes/modules.ts", `// Every frontend module's routes — the one place a module is registered.
+// Tooling inserts lines between the elco:* markers. Keep the markers; add modules between
+// them, never around them.
+import type { ModuleRoutes } from "@/shared/types/module-routes";
+// elco:routes:imports:begin
+import { authRoutes } from "@/modules/auth/routes";
+import { dashboardRoutes } from "@/modules/dashboard/routes";
+// elco:routes:imports:end
+
+export const moduleRoutes: ModuleRoutes[] = [
+  // elco:routes:begin
+  authRoutes,
+  dashboardRoutes,
+  // elco:routes:end
+];
+`);
+
+file("apps/web/src/app/routes/index.tsx", `import { Navigate, createBrowserRouter } from "react-router-dom";
 import { ROUTE_PATHS } from "@/app/routes/route-paths";
+import { moduleRoutes } from "@/app/routes/modules";
+
+const publicRoutes = moduleRoutes.flatMap((m) => m.public ?? []);
+// Wrap these in the auth guard's layout route once an auth module provides one.
+const protectedRoutes = moduleRoutes.flatMap((m) => m.protected ?? []);
+
+export const router = createBrowserRouter([
+  { path: ROUTE_PATHS.home, element: <Navigate to={ROUTE_PATHS.start} replace /> },
+  ...publicRoutes,
+  ...protectedRoutes,
+]);
+`);
+
+file("apps/web/src/modules/auth/routes.tsx", `import { lazy } from "react";
+import type { ModuleRoutes } from "@/shared/types/module-routes";
 
 const LoginPage = lazy(() => import("@/modules/auth/pages/LoginPage"));
 
-export const publicRoutes = [
-  { path: ROUTE_PATHS.home, element: <LoginPage /> },
-  { path: ROUTE_PATHS.login, element: <LoginPage /> },
-];
+export const AUTH_PATHS = {
+  login: "/login",
+} as const;
+
+export const authRoutes: ModuleRoutes = {
+  public: [{ path: AUTH_PATHS.login, element: <LoginPage /> }],
+};
 `);
 
-file("apps/web/src/app/routes/protected.routes.tsx", `import { lazy } from "react";
-import { ROUTE_PATHS } from "@/app/routes/route-paths";
+file("apps/web/src/modules/dashboard/routes.tsx", `import { lazy } from "react";
+import type { ModuleRoutes } from "@/shared/types/module-routes";
 
 const DashboardPage = lazy(() => import("@/modules/dashboard/pages/DashboardPage"));
 
-export const protectedRoutes = [
-  { path: ROUTE_PATHS.dashboard, element: <DashboardPage /> },
-];
+export const DASHBOARD_PATHS = {
+  home: "/dashboard",
+} as const;
+
+export const dashboardRoutes: ModuleRoutes = {
+  protected: [{ path: DASHBOARD_PATHS.home, element: <DashboardPage /> }],
+};
 `);
 
-file("apps/web/src/app/routes/index.tsx", `import { createBrowserRouter } from "react-router-dom";
-import { publicRoutes } from "@/app/routes/public.routes";
-import { protectedRoutes } from "@/app/routes/protected.routes";
+file("apps/web/src/shared/components/feedback/LoadingState.tsx", `import { Spinner } from "@/shared/components/primitives/spinner";
 
-export const router = createBrowserRouter([...publicRoutes, ...protectedRoutes]);
-`);
-
-file("apps/web/src/shared/components/feedback/LoadingState.tsx", `export function LoadingState() {
+export function LoadingState() {
   return (
-    <div className="flex min-h-screen items-center justify-center text-[var(--color-muted)]">
-      Loading…
+    <div className="flex min-h-screen items-center justify-center gap-2 text-muted-foreground">
+      <Spinner />
+      <span aria-hidden="true">Loading…</span>
     </div>
   );
 }
@@ -1325,10 +1446,17 @@ export type LoginFormValues = z.infer<typeof loginSchema>;
 
 file("apps/web/src/modules/auth/pages/LoginPage.tsx", `import { useState } from "react";
 import type { FormEvent } from "react";
+import { Button } from "@/shared/components/primitives/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/primitives/card";
+import { Input } from "@/shared/components/primitives/input";
+import { Label } from "@/shared/components/primitives/label";
 import { loginSchema } from "@/modules/auth/schemas/login.schema";
+import type { LoginFormValues } from "@/modules/auth/schemas/login.schema";
+
+type FieldErrors = Partial<Record<keyof LoginFormValues, string>>;
 
 export default function LoginPage() {
-  const [errors, setErrors] = useState<string[]>([]);
+  const [errors, setErrors] = useState<FieldErrors>({});
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1338,42 +1466,55 @@ export default function LoginPage() {
       password: formData.get("password"),
     });
     if (!result.success) {
-      setErrors(result.error.issues.map((issue) => issue.message));
+      const next: FieldErrors = {};
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as keyof LoginFormValues;
+        next[field] ??= issue.message;
+      }
+      setErrors(next);
       return;
     }
-    setErrors([]);
+    setErrors({});
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)]">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-[var(--radius-lg)] bg-[var(--color-surface)] p-8 shadow"
-      >
-        <h1 className="text-xl font-semibold text-[var(--color-text)]">Sign in</h1>
-        <input
-          name="email"
-          type="email"
-          placeholder="Email"
-          className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2"
-        />
-        <input
-          name="password"
-          type="password"
-          placeholder="Password"
-          className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2"
-        />
-        {errors.map((err) => (
-          <p key={err} className="text-sm text-red-600">{err}</p>
-        ))}
-        <button
-          type="submit"
-          className="w-full rounded-[var(--radius-sm)] bg-[var(--color-primary)] px-3 py-2 text-white hover:bg-[var(--color-primary-hover)]"
-        >
-          Sign in
-        </button>
-      </form>
-    </div>
+    <main className="flex min-h-screen items-center justify-center bg-background p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="font-display text-xl">Sign in</CardTitle>
+          <CardDescription>Use your account to continue.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} noValidate className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                aria-invalid={errors.email ? true : undefined}
+                aria-describedby={errors.email ? "email-error" : undefined}
+              />
+              {errors.email && <p id="email-error" className="text-sm text-destructive">{errors.email}</p>}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                aria-invalid={errors.password ? true : undefined}
+                aria-describedby={errors.password ? "password-error" : undefined}
+              />
+              {errors.password && <p id="password-error" className="text-sm text-destructive">{errors.password}</p>}
+            </div>
+            <Button type="submit" className="w-full">Sign in</Button>
+          </form>
+        </CardContent>
+      </Card>
+    </main>
   );
 }
 `);
@@ -1420,6 +1561,8 @@ export const useHealthStore = create<HealthState>((set) => ({
 `);
 
 file("apps/web/src/modules/dashboard/pages/DashboardPage.tsx", `import { useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/primitives/card";
+import { Spinner } from "@/shared/components/primitives/spinner";
 import { useHealthStore } from "@/modules/dashboard/stores/health.store";
 
 export default function DashboardPage() {
@@ -1430,17 +1573,22 @@ export default function DashboardPage() {
   }, [check]);
 
   return (
-    <div className="min-h-screen bg-[var(--color-background)] p-8">
-      <h1 className="text-2xl font-semibold text-[var(--color-text)]">Dashboard</h1>
-      <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-        <p className="text-sm text-[var(--color-muted)]">API health check (/api/v1/health)</p>
-        {status === "loading" && <p>Checking…</p>}
-        {status === "error" && <p className="text-red-600">{error}</p>}
-        {status === "success" && (
-          <pre className="mt-2 text-sm">{JSON.stringify(result, null, 2)}</pre>
-        )}
-      </div>
-    </div>
+    <main className="min-h-screen bg-background p-8">
+      <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>API health</CardTitle>
+          <CardDescription>GET /api/v1/health</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {status === "loading" && <Spinner />}
+          {status === "error" && <p className="text-sm text-destructive">{error}</p>}
+          {status === "success" && (
+            <pre className="font-mono text-sm">{JSON.stringify(result, null, 2)}</pre>
+          )}
+        </CardContent>
+      </Card>
+    </main>
   );
 }
 `);
@@ -1454,6 +1602,35 @@ export const httpClient = axios.create({
   timeout: 30000,
   headers: { "Content-Type": "application/json" },
 });
+
+// Hooks for the auth module, so it plugs in without editing this file.
+let authToken: string | null = null;
+const unauthorizedHandlers = new Set<() => void>();
+
+/** Sets the bearer token sent with every request; null clears it. */
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+}
+
+/** Runs handler whenever the API answers 401. Returns a function that removes it. */
+export function onUnauthorized(handler: () => void): () => void {
+  unauthorizedHandlers.add(handler);
+  return () => {
+    unauthorizedHandlers.delete(handler);
+  };
+}
+
+httpClient.interceptors.request.use((config) => {
+  if (authToken) config.headers.Authorization = \`Bearer \${authToken}\`;
+  return config;
+});
+
+httpClient.interceptors.response.use(undefined, (error: unknown) => {
+  if (axios.isAxiosError(error) && error.response?.status === 401) {
+    unauthorizedHandlers.forEach((handler) => handler());
+  }
+  return Promise.reject(error);
+});
 `);
 
 file("apps/web/src/shared/services/api-endpoints.ts", `export const API = {
@@ -1461,41 +1638,17 @@ file("apps/web/src/shared/services/api-endpoints.ts", `export const API = {
 } as const;
 `);
 
-file("apps/web/src/theme/theme.css", `:root {
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-primary-soft: #dbeafe;
-
-  --color-secondary: #64748b;
-  --color-background: #f8fafc;
-  --color-surface: #ffffff;
-  --color-border: #e2e8f0;
-  --color-text: #0f172a;
-  --color-muted: #64748b;
-
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-}
-`);
-
-file("apps/web/src/theme/colors.ts", `export const colors = {
-  primary: "var(--color-primary)",
-  primaryHover: "var(--color-primary-hover)",
-  primarySoft: "var(--color-primary-soft)",
-  secondary: "var(--color-secondary)",
-  background: "var(--color-background)",
-  surface: "var(--color-surface)",
-  border: "var(--color-border)",
-  text: "var(--color-text)",
-  muted: "var(--color-muted)",
-} as const;
-`);
-file("apps/web/src/theme/index.ts", `export * from "./colors";\n`);
-
-file("apps/web/src/styles/globals.css", `@import "tailwindcss";
+// theme.css is the Tailwind entry and the token contract (references/frontend.md);
+// globals.css holds app-wide styles beyond it.
+template("web/theme.css", "apps/web/src/theme/theme.css");
+file("apps/web/src/styles/globals.css", `/* App-wide styles beyond the theme. Tailwind and every token come from theme.css. */
 @import "../theme/theme.css";
 `);
+// The minimum shadcn primitives the starter pages need. The rest come from
+// \`npx shadcn@latest add\` or the module library.
+for (const p of ["badge", "button", "card", "dialog", "input", "label", "skeleton", "spinner"]) {
+  template(`web/primitives/${p}.tsx`, `apps/web/src/shared/components/primitives/${p}.tsx`);
+}
 
 // Frontend empty dirs (structure scaffold) — modules with real content still get the
 // remaining stub subfolders so every module has the full seven-folder shape (P2-15).
@@ -1510,13 +1663,13 @@ function scaffoldWebModuleKeep(mod) {
     `apps/web/src/modules/${mod}/types`,
   );
 }
-["auth", "dashboard", "users"].forEach(scaffoldWebModuleKeep);
+["auth", "dashboard"].forEach(scaffoldWebModuleKeep);
 
 keep(
   "apps/web/public",
-  "apps/web/src/shared/components/ui", "apps/web/src/shared/components/feedback",
+  "apps/web/src/shared/components/ui", "apps/web/src/shared/components/patterns",
   "apps/web/src/shared/layouts", "apps/web/src/shared/stores", "apps/web/src/shared/hooks",
-  "apps/web/src/shared/lib", "apps/web/src/shared/types", "apps/web/src/shared/constants",
+  "apps/web/src/shared/lib", "apps/web/src/shared/constants",
 );
 
 // ---------------------------------------------------------------------------
@@ -1533,7 +1686,15 @@ function scaffoldModuleKeep(base, mod) {
 }
 
 if (backend === "go") {
-  file("apps/api/go.mod", `module ${goModule}\n\ngo 1.22\n\nrequire github.com/joho/godotenv v1.5.1\n`);
+  file("apps/api/go.mod", `module ${goModule}
+
+go 1.22
+
+require (
+	github.com/go-sql-driver/mysql v1.8.1
+	github.com/joho/godotenv v1.5.1
+)
+`);
   file("apps/api/.air.toml", `root = "."
 tmp_dir = "tmp"
 
@@ -1552,81 +1713,38 @@ time = true
 [misc]
 clean_on_exit = true
 `);
-  const sqlcModules = ["auth", "users", "order"];
-  const sqlcBlocks = sqlcModules.map((m) => `  - engine: "mysql"
-    schema: "migrations"
-    queries: "internal/modules/${m}/infrastructure/queries"
-    gen:
-      go:
-        package: "sqlc"
-        out: "internal/modules/${m}/infrastructure/sqlc"`).join("\n");
-  file("apps/api/sqlc.yaml", `version: "2"\nsql:\n${sqlcBlocks}\n`);
-  file("apps/api/cmd/server/main.go", `package main
-
-import (
-	"log"
-	"net/http"
-	"os"
-	"path/filepath"
-
-	"github.com/joho/godotenv"
-)
-
-// staticHandler serves publicDir, falling back to index.html for SPA client-side routes.
-func staticHandler(dir string) http.Handler {
-	fileServer := http.FileServer(http.Dir(dir))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := filepath.Join(dir, filepath.Clean(r.URL.Path))
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
-	})
-}
-
-func main() {
-	// .env lives at the repo root; the API runs from apps/api. Errors are ignored:
-	// in the container, env is injected via env_file.
-	_ = godotenv.Load("../../.env")
-	_ = godotenv.Load(".env")
-
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(\`{"success":true,"message":"ok","data":null}\`))
-	})
-	// Readiness probe for the image HEALTHCHECK and deploy.sh. Once the database is wired,
-	// ping it here and answer 503 while it is unreachable.
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(\`{"success":true,"message":"ready","data":null}\`))
-	})
-
-	// http.ServeMux matches the longest pattern, so /api/v1/... still wins over /.
-	if publicDir := os.Getenv("PUBLIC_DIR"); publicDir != "" {
-		if _, err := os.Stat(publicDir); err == nil {
-			mux.Handle("/", staticHandler(publicDir))
-		}
-	}
-
-	log.Printf("api listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
-}
+  // Every module adds its own sql: block between the markers (one generated package per
+  // module keeps the contracts-only boundary). sqlc refuses a config with no block at all
+  // ("no packages"), so `npm run sqlc:generate` only works once the first module is in.
+  file("apps/api/sqlc.yaml", `version: "2"
+sql:
+  # elco:sqlc:begin
+  # elco:sqlc:end
 `);
-  file("apps/api/migrations/000001_create_users_table.up.sql", `CREATE TABLE users (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  email VARCHAR(255) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id)
-);
-`);
-  file("apps/api/migrations/000001_create_users_table.down.sql", `DROP TABLE IF EXISTS users;\n`);
+  // The kernel — the stable surface every module is built against (references/backend-go.md).
+  for (const rel of [
+    "cmd/server/main.go",
+    "internal/config/config.go",
+    "internal/database/database.go",
+    "internal/kernel/kernel.go",
+    "internal/modules/registry.go",
+    "internal/server/server.go",
+    "internal/server/middleware.go",
+    "internal/shared/apperror/apperror.go",
+    "internal/shared/logger/logger.go",
+    "internal/shared/pagination/pagination.go",
+    "internal/shared/request/request.go",
+    "internal/shared/response/response.go",
+    "internal/shared/validator/validator.go",
+  ]) {
+    template(`go/${rel}.tmpl`, `apps/api/${rel}`, { __GO_MODULE__: goModule });
+  }
+  // Timestamp-versioned, so migrations added on two branches never collide. golang-migrate
+  // fails `up` on an empty directory, which would break the first deploy — hence a no-op
+  // baseline that also creates schema_migrations.
+  const baseline = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+  file(`apps/api/migrations/${baseline}_baseline.up.sql`, `-- Baseline: golang-migrate fails \`up\` on an empty migrations directory.\nSELECT 1;\n`);
+  file(`apps/api/migrations/${baseline}_baseline.down.sql`, `SELECT 1;\n`);
   file("scripts/migrate.mjs", `#!/usr/bin/env node
 // golang-migrate wrapper that works the same in PowerShell, cmd, and sh.
 // npm runs scripts through cmd.exe on Windows, which does not expand $VAR — so the DB
@@ -1654,22 +1772,6 @@ const r = spawnSync(
 );
 process.exit(r.status ?? 1);
 `);
-  for (const m of sqlcModules) {
-    file(`apps/api/internal/modules/${m}/${m}.module.go`, `package ${m}\n\n// Module wiring/bootstrap for the ${m} module.\n// Only contracts/ is importable by other modules.\n`);
-  }
-  keep(
-    "apps/api/internal/config",
-    "apps/api/internal/database",
-    "apps/api/internal/router",
-    "apps/api/internal/server",
-    "apps/api/internal/shared",
-  );
-  scaffoldModuleKeep("apps/api/internal/modules", "auth");
-  scaffoldModuleKeep("apps/api/internal/modules", "users");
-  scaffoldModuleKeep("apps/api/internal/modules", "order");
-  for (const m of sqlcModules) {
-    keep(`apps/api/internal/modules/${m}/infrastructure/queries`, `apps/api/internal/modules/${m}/infrastructure/sqlc`);
-  }
 }
 
 if (backend === "nestjs") {
@@ -1783,9 +1885,7 @@ export class AppModule {}
     },
   }, null, 2) + "\n");
   keep("apps/api/src/shared");
-  scaffoldModuleKeep("apps/api/src/modules", "auth");
-  scaffoldModuleKeep("apps/api/src/modules", "users");
-  scaffoldModuleKeep("apps/api/src/modules", "order");
+  for (const m of starterApiModules) scaffoldModuleKeep("apps/api/src/modules", m);
 }
 
 if (backend === "express") {
@@ -1850,9 +1950,7 @@ Decide on a tool (e.g. Knex, Drizzle, Prisma, node-pg-migrate) and document it h
 before implementing migrations.
 `);
   keep("apps/api/src/shared");
-  scaffoldModuleKeep("apps/api/src/modules", "auth");
-  scaffoldModuleKeep("apps/api/src/modules", "users");
-  scaffoldModuleKeep("apps/api/src/modules", "order");
+  for (const m of starterApiModules) scaffoldModuleKeep("apps/api/src/modules", m);
 }
 
 // scripts/ at repo root (kept for project scripts)

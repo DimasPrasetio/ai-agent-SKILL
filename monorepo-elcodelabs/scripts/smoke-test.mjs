@@ -6,6 +6,9 @@
 //   1. Scaffold to a temp dir.
 //   2. npm install — must exit 0.
 //   3. Type-check: build:web, and build:api for Node stacks.
+//      Go also: gofmt, a fixture module installed through the registry/sqlc markers, go vet,
+//      go build, then the built binary is run directly (health, /readyz, JSON 404, the
+//      fixture's route) — so the kernel is checked even where air is not installed.
 //   4. Start dev:api, poll GET /api/v1/health, expect success:true, check GET /readyz, stop it.
 //   5. Start dev:web, confirm Vite responds and the /api proxy reaches the API.
 //   6. Clean up the temp dir.
@@ -16,7 +19,7 @@
 // Usage: node scripts/smoke-test.mjs
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -145,6 +148,153 @@ async function pollUrlOk(url, timeoutMs = 20000, proc = null) {
   throw lastErr ?? new Error("timed out");
 }
 
+// GET /readyz must answer one of the allowed statuses with the API envelope.
+async function checkReadyz(port, allowed, label) {
+  try {
+    const res = await fetch(`http://localhost:${port}/readyz`);
+    const body = await res.json().catch(() => null);
+    const envelopeOk = body && typeof body.success === "boolean" && body.success === (res.status === 200);
+    if (allowed.includes(res.status) && envelopeOk) {
+      pass(`${label} → GET /readyz → ${res.status} ${JSON.stringify(body)}`);
+    } else {
+      fail(`${label} GET /readyz answered ${res.status} ${JSON.stringify(body)} (allowed: ${allowed.join("/")} with envelope)`);
+    }
+  } catch (err) {
+    fail(`${label} GET /readyz failed: ${err.message}`);
+  }
+}
+
+// Installs a minimal module the way the module library will: its own folder, a contract, an
+// sqlc block and a migration between the markers, and two lines in registry.go. Proves the
+// registry, markers, timestamp migrations, and per-module sqlc fit together. Needs sqlc.
+function installGoFixtureModule(dir) {
+  if (!commandExists("sqlc")) {
+    skip("go: fixture module — 'sqlc' not found on PATH");
+    return false;
+  }
+  const api = join(dir, "apps/api");
+  const goModule = readFileSync(join(api, "go.mod"), "utf8").match(/^module (\S+)/m)[1];
+  const mod = join(api, "internal/modules/ping");
+  const write = (rel, content) => {
+    mkdirSync(dirname(join(mod, rel)), { recursive: true });
+    writeFileSync(join(mod, rel), content);
+  };
+  write("contracts/ping_client.go", `package contracts
+
+import "context"
+
+// PingClient is the ping module's public contract.
+type PingClient interface {
+	Count(ctx context.Context) (int64, error)
+}
+`);
+  write("infrastructure/queries/ping.sql", `-- name: CountPings :one
+SELECT COUNT(*) FROM pings;
+`);
+  write("ping.module.go", `package ping
+
+import (
+	"context"
+	"net/http"
+
+	"${goModule}/internal/kernel"
+	"${goModule}/internal/modules/ping/contracts"
+	"${goModule}/internal/modules/ping/infrastructure/sqlc"
+	"${goModule}/internal/shared/response"
+)
+
+type Module struct {
+	q *sqlc.Queries
+}
+
+func New(d *kernel.Deps) *Module { return &Module{q: sqlc.New(d.DB)} }
+
+func (m *Module) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/ping", func(w http.ResponseWriter, r *http.Request) {
+		response.OK(w, "pong", map[string]bool{"pong": true})
+	})
+}
+
+func (m *Module) Client() contracts.PingClient { return m }
+
+func (m *Module) Count(ctx context.Context) (int64, error) { return m.q.CountPings(ctx) }
+`);
+  writeFileSync(join(api, "migrations/20990101000000_create_pings.up.sql"),
+    "CREATE TABLE pings (\n  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,\n  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n");
+  writeFileSync(join(api, "migrations/20990101000000_create_pings.down.sql"), "DROP TABLE IF EXISTS pings;\n");
+
+  const insertBefore = (rel, marker, text) => {
+    const p = join(api, rel);
+    const src = readFileSync(p, "utf8");
+    if (!src.includes(marker)) throw new Error(`${rel} lost its marker ${marker}`);
+    writeFileSync(p, src.replace(marker, text + marker));
+  };
+  try {
+    insertBefore("internal/modules/registry.go", "\t// elco:imports:end", `\t"${goModule}/internal/modules/ping"\n`);
+    insertBefore("internal/modules/registry.go", "\t// elco:modules:end", "\tpingModule := ping.New(d)\n\tpingModule.Routes(mux)\n");
+    insertBefore("sqlc.yaml", "  # elco:sqlc:end", `  - engine: "mysql"
+    schema: "migrations"
+    queries: "internal/modules/ping/infrastructure/queries"
+    gen:
+      go:
+        package: "sqlc"
+        out: "internal/modules/ping/infrastructure/sqlc"
+`);
+  } catch (err) {
+    fail(`fixture module: ${err.message}`);
+    return false;
+  }
+  const gen = run("npm", ["run", "sqlc:generate"], { cwd: dir });
+  if (gen.status !== 0) {
+    fail(`fixture module: sqlc:generate exited ${gen.status}\n${gen.stdout}${gen.stderr}`);
+    return false;
+  }
+  pass("fixture module installed through the markers (registry.go, sqlc.yaml, migration) + sqlc:generate");
+  return true;
+}
+
+// Runs the built binary directly — no air needed — and checks the kernel's endpoints.
+// SMOKE_DB_DSN, when set to a reachable MySQL, makes /readyz expect 200 instead of 503.
+async function checkGoBinary(dir, fixtureInstalled) {
+  const port = "18090";
+  killPort(port);
+  // build:api writes dist/api; Windows only runs files with an executable extension.
+  let bin = join(dir, "dist", "api");
+  if (process.platform === "win32") {
+    copyFileSync(bin, `${bin}.exe`);
+    bin = `${bin}.exe`;
+  }
+  const env = { ...process.env, APP_PORT: port };
+  if (process.env.SMOKE_DB_DSN) env.DB_DSN = process.env.SMOKE_DB_DSN;
+  const proc = spawn(bin, [], {
+    cwd: join(dir, "apps/api"), env, detached: process.platform !== "win32",
+  });
+  let output = "";
+  proc.stdout?.on("data", (d) => { output += d; });
+  proc.stderr?.on("data", (d) => { output += d; });
+  try {
+    await pollHealth(port, 15000, proc);
+    pass("api binary → GET /api/v1/health → 200");
+    await checkReadyz(port, process.env.SMOKE_DB_DSN ? [200] : [503], "api binary");
+    const nf = await fetch(`http://localhost:${port}/api/v1/does-not-exist`);
+    const nfBody = await nf.json().catch(() => null);
+    if (nf.status === 404 && nfBody?.success === false) pass("api binary → unknown /api/ path → JSON 404");
+    else fail(`unknown /api/ path answered ${nf.status} ${JSON.stringify(nfBody)}`);
+    if (fixtureInstalled) {
+      const ping = await fetch(`http://localhost:${port}/api/v1/ping`);
+      const pingBody = await ping.json().catch(() => null);
+      if (ping.status === 200 && pingBody?.data?.pong === true) pass("api binary → fixture module route mounted via registry");
+      else fail(`fixture route answered ${ping.status} ${JSON.stringify(pingBody)}`);
+    }
+    if (!process.env.SMOKE_DB_DSN) skip("go: /readyz → 200 — set SMOKE_DB_DSN to a reachable MySQL to check it");
+  } catch (err) {
+    fail(`api binary did not serve: ${err.message}\n${output.trim()}`);
+  } finally {
+    killTree(proc);
+    killPort(port);
+  }
+}
+
 async function testStack(stack) {
   log(`\n=== ${stack} (name: "${DIRTY_NAME}") ===`);
   const dir = mkdtempSync(join(SCRATCH_ROOT, `${stack}-`));
@@ -179,6 +329,7 @@ async function testStack(stack) {
 
     // Go needs `go mod tidy` once after scaffolding to resolve go.sum (documented in
     // references/backend-go.md) — not part of npm install, run it explicitly here.
+    let fixtureInstalled = false;
     if (stack === "go") {
       if (commandExists("go")) {
         const tidy = run("go", ["mod", "tidy"], { cwd: join(dir, "apps/api") });
@@ -187,8 +338,15 @@ async function testStack(stack) {
         } else {
           pass("go mod tidy");
         }
+        const fmt = run("gofmt", ["-l", "."], { cwd: join(dir, "apps/api") });
+        if (fmt.stdout.trim()) fail(`kernel is not gofmt-clean:\n${fmt.stdout.trim()}`);
+        else pass("gofmt: kernel is formatted");
+        fixtureInstalled = installGoFixtureModule(dir);
+        const vet = run("go", ["vet", "./..."], { cwd: join(dir, "apps/api") });
+        if (vet.status !== 0) fail(`go vet exited ${vet.status}\n${vet.stderr}`);
+        else pass(`go vet ./...${fixtureInstalled ? " (with fixture module)" : ""}`);
       } else {
-        skip(`${stack}: go mod tidy — 'go' not found on PATH`);
+        skip(`${stack}: go mod tidy / vet — 'go' not found on PATH`);
       }
     }
 
@@ -213,6 +371,7 @@ async function testStack(stack) {
         fail(`npm run build:api exited ${buildApi.status}\n${buildApi.stderr}`);
       } else {
         pass("build:api (go build)");
+        await checkGoBinary(dir, fixtureInstalled);
       }
     } else {
       skip(`${stack}: build:api — 'go' not found on PATH`);
@@ -232,9 +391,8 @@ async function testStack(stack) {
         const body = await pollHealth(port, 25000, apiProc);
         if (body.success === true) { apiHealthy = true; pass(`dev:api → GET /api/v1/health → ${JSON.stringify(body)}`); }
         // /readyz is the probe the image HEALTHCHECK and deploy.sh wait on (elcodelabs VPS).
-        const ready = await fetch(`http://localhost:${port}/readyz`).catch((e) => ({ ok: false, status: e.message }));
-        if (ready.ok) pass("dev:api → GET /readyz → 200");
-        else fail(`dev:api GET /readyz did not return 200 (${ready.status})`);
+        // Go pings the database, so without one it must answer 503 — still as an envelope.
+        await checkReadyz(port, stack === "go" ? [200, 503] : [200], "dev:api");
       } catch (err) {
         if (stack === "go" && err instanceof ProcessExitedEarlyError) {
           // A FAILURE, not a skip. This branch used to be reported as "probably an AV/execution

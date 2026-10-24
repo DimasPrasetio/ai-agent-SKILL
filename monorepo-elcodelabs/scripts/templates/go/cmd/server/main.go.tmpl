@@ -1,0 +1,74 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/joho/godotenv"
+
+	"__GO_MODULE__/internal/config"
+	"__GO_MODULE__/internal/database"
+	"__GO_MODULE__/internal/kernel"
+	"__GO_MODULE__/internal/modules"
+	"__GO_MODULE__/internal/server"
+	"__GO_MODULE__/internal/shared/logger"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "api:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	// .env lives at the repo root; the API runs from apps/api. Errors are ignored:
+	// in the container, env is injected via env_file.
+	_ = godotenv.Load("../../.env")
+	_ = godotenv.Load(".env")
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	log := logger.New(cfg.Env)
+
+	db, err := database.Open(cfg.DBDSN)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	deps := &kernel.Deps{Config: cfg, DB: db, Log: log}
+	srv := server.New(deps, func(mux *http.ServeMux) { modules.Register(mux, deps) })
+
+	// docker stop sends SIGTERM: finish in-flight requests before exiting.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errc := make(chan error, 1)
+	go func() {
+		log.Info("api listening", "addr", srv.Addr, "env", cfg.Env)
+		errc <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	log.Info("api stopped")
+	return nil
+}

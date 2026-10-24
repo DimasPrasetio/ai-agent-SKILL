@@ -146,13 +146,64 @@ try {
   }
 } catch (err) { bad("backend-express.md apps/api scripts + nodemon.json", err.message); }
 
-// 5. frontend.md -> theme.css
+// 5. frontend.md token contract <-> theme.css. Compared as sets of NAMES, both ways: the file
+// itself is a template (scripts/templates/web/theme.css), and its values are the project's to
+// change — but a name in the contract that the theme stops defining breaks every component
+// built on it, and a name the theme defines outside the contract is one nobody promised.
 try {
-  const ref = extractAfter(readRef("frontend.md"), "`theme.css`:", "css").trim();
-  const gen = readGenerated("express", "apps/web/src/theme/theme.css").trim();
-  if (ref === gen) ok("frontend.md theme.css == apps/web/src/theme/theme.css");
-  else bad("frontend.md theme.css != apps/web/src/theme/theme.css", `--- reference ---\n${ref}\n--- generated ---\n${gen}`);
-} catch (err) { bad("frontend.md theme.css", err.message); }
+  const ref = extractAfter(readRef("frontend.md"), "The contract — every one of these", "txt")
+    .split(/\s+/).filter((t) => t.startsWith("--")).sort();
+  const gen = readGenerated("express", "apps/web/src/theme/theme.css");
+  const rootBlock = gen.slice(gen.indexOf(":root {"), gen.indexOf("}", gen.indexOf(":root {")));
+  const defined = [...rootBlock.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]);
+  const themeInline = gen.slice(gen.indexOf("@theme inline {"));
+  for (const t of ["--font-sans", "--font-display", "--font-mono", "--text-2xs"]) {
+    if (new RegExp(`^\\s*${t}:`, "m").test(themeInline)) defined.push(t);
+  }
+  const genNames = [...new Set(defined)].sort();
+  const only = (a, b) => a.filter((x) => !b.includes(x));
+  const missing = only(ref, genNames);
+  const extra = only(genNames, ref);
+  // Every :root color token must also be exposed to Tailwind, or its semantic class never exists.
+  const isColor = (t) => !/^--(radius|row-py|shadow-|font-|text-)/.test(t);
+  const unmapped = defined.filter(isColor)
+    .filter((t) => !themeInline.includes(`--color-${t.slice(2)}: var(${t});`));
+  if (!missing.length && !extra.length && !unmapped.length) ok(`frontend.md token contract == theme.css tokens (${ref.length})`);
+  else bad("frontend.md token contract != theme.css",
+    `in contract, not defined: ${missing.join(", ") || "(none)"}\ndefined, not in contract: ${extra.join(", ") || "(none)"}\nnot mapped in @theme inline: ${unmapped.join(", ") || "(none)"}`);
+} catch (err) { bad("frontend.md token contract", err.message); }
+
+// 5b. Every primitive the scaffold ships imports cn from the "cn" package — what the shadcn CLI
+// writes — and components.json points the CLI at it. A primitive importing a local helper would
+// drift from every component `npx shadcn add` produces later.
+try {
+  const root = scaffoldOnce("express");
+  const dir = join(root, "apps/web/src/shared/components/primitives");
+  const problems = readdirSync(dir).filter((f) => {
+    const src = readFileSync(join(dir, f), "utf8");
+    return /\bcn\(/.test(src) && !src.includes('import { cn } from "cn"');
+  });
+  const cfg = JSON.parse(readFileSync(join(root, "apps/web/components.json"), "utf8"));
+  if (cfg.aliases?.utils !== "cn") problems.push(`components.json aliases.utils is ${JSON.stringify(cfg.aliases?.utils)}, not "cn"`);
+  if (cfg.tailwind?.css !== "src/theme/theme.css") problems.push("components.json tailwind.css must be src/theme/theme.css");
+  if (cfg.aliases?.ui !== "@/shared/components/primitives") problems.push("components.json aliases.ui must be @/shared/components/primitives");
+  if (problems.length === 0) ok("primitives import cn from \"cn\"; components.json matches frontend.md");
+  else bad("shadcn wiring drifted", problems.join("\n"));
+} catch (err) { bad("shadcn wiring", err.message); }
+
+// 5c. backend-go.md registry example must use the markers the generated registry.go carries.
+try {
+  const gen = readGenerated("go", "apps/api/internal/modules/registry.go");
+  const ref = readRef("backend-go.md");
+  const markers = ["// elco:imports:begin", "// elco:imports:end", "// elco:modules:begin", "// elco:modules:end"];
+  const missingGen = markers.filter((m) => !gen.includes(m));
+  const missingRef = markers.filter((m) => !ref.includes(m.replace("// ", "")));
+  const sqlc = readGenerated("go", "apps/api/sqlc.yaml");
+  if (!sqlc.includes("# elco:sqlc:begin") || !sqlc.includes("# elco:sqlc:end")) missingGen.push("sqlc.yaml elco:sqlc markers");
+  if (!gen.includes("func Register(mux *http.ServeMux, d *kernel.Deps)")) missingGen.push("Register signature");
+  if (!missingGen.length && !missingRef.length) ok("registry.go + sqlc.yaml markers == backend-go.md");
+  else bad("Go registry markers drifted", `missing in generated: ${missingGen.join(", ") || "(none)"}\nmissing in backend-go.md: ${missingRef.join(", ") || "(none)"}`);
+} catch (err) { bad("Go registry markers", err.message); }
 
 // 6. frontend.md -> http-client.ts
 try {
@@ -212,6 +263,9 @@ const FACT_OWNERS = {
   "Research date:": ["knowledge/DESIGN.md"],
   "WCAG 2.2": ["knowledge/DESIGN.md"],
   "older than ~6 months": [".claude/rules/frontend-react.md"],
+  // Modules: the rule owns the registry/marker discipline; CLAUDE.md restates the invariant.
+  "elco:": ["CLAUDE.md", ".claude/rules/modules.md"],
+  "semantic": [".claude/rules/frontend-react.md", "CLAUDE.md"],
 };
 for (const backend of ["go", "nestjs", "express"]) {
   try {

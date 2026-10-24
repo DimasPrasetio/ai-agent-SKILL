@@ -67,10 +67,10 @@ The body below is the always-loaded summary. Detailed, stack-specific rules live
 |---|---|
 | Knowledge gateway: `CLAUDE.md`, `knowledge/`, `.claude/rules/` | [references/knowledge-gateway.md](references/knowledge-gateway.md) |
 | Backend modular-monolith rules (all stacks) | [references/backend-modular-monolith.md](references/backend-modular-monolith.md) |
-| Go backend (Air, golang-migrate, sqlc) | [references/backend-go.md](references/backend-go.md) |
+| Go backend (kernel, module contract + registry, Air, golang-migrate, sqlc) | [references/backend-go.md](references/backend-go.md) |
 | NestJS backend (Prisma, watch) | [references/backend-nestjs.md](references/backend-nestjs.md) |
 | Express backend (nodemon) | [references/backend-express.md](references/backend-express.md) |
-| Frontend `apps/web` (React 19, Zustand, Zod, Axios, theme) | [references/frontend.md](references/frontend.md) |
+| Frontend `apps/web` (React 19, shadcn/ui, token contract, route registry, Zustand, Zod, Axios) | [references/frontend.md](references/frontend.md) |
 | Design research before UI: what to research, source quality, the `knowledge/DESIGN.md` brief | [references/design-research.md](references/design-research.md) |
 | API conventions + env standard | [references/api-standard.md](references/api-standard.md) |
 | Deployment: Docker image, CI → GHCR, elcodelabs VPS (compose, deploy.sh, nginx, MySQL) | [references/docker-deployment.md](references/docker-deployment.md) |
@@ -133,8 +133,8 @@ Forbidden as the default dev workflow: `go run main.go`, `node server.js`, produ
 
 ## Backend & Frontend (summary)
 
-- **Backend** is always a Modular Monolith. Each module exposes only `contracts/` as its public boundary; cross-module service/repository/domain imports, cross-module DB joins, and cross-module foreign keys are forbidden. Full rules: [references/backend-modular-monolith.md](references/backend-modular-monolith.md).
-- **Frontend** is React 19 + Tailwind 4 with react-router-dom (lazy routes), Zustand, Zod, Axios, and the `@/*` alias; theme color is centralized. Use the `frontend-design` skill as the UI authority — if it isn't installed, install it first from the source in [references/frontend.md](references/frontend.md) rather than skipping it. Full rules: [references/frontend.md](references/frontend.md). Before the first UI, research how this kind of app is ideally designed today and write the brief to `knowledge/DESIGN.md` — [references/design-research.md](references/design-research.md).
+- **Backend** is always a Modular Monolith. Each module exposes only `contracts/` as its public boundary; cross-module service/repository/domain imports, cross-module DB joins, and cross-module foreign keys are forbidden. Full rules: [references/backend-modular-monolith.md](references/backend-modular-monolith.md). In Go, every module is built on the kernel (`kernel.Deps`, `shared/response`, `shared/apperror`, …) and wired only in `internal/modules/registry.go` — [references/backend-go.md](references/backend-go.md#the-kernel).
+- **Frontend** is React 19 + Tailwind 4 on shadcn/ui (Radix) with react-router-dom (lazy routes registered per module in `app/routes/modules.ts`), Zustand, Zod, Axios, and the `@/*` alias. Every color, font, radius, and shadow comes from the token contract in `src/theme/theme.css` through semantic classes — token names are fixed, values belong to the project or a preset. Use the `frontend-design` skill as the UI authority — if it isn't installed, install it first from the source in [references/frontend.md](references/frontend.md) rather than skipping it. Full rules: [references/frontend.md](references/frontend.md). Before the first UI, research how this kind of app is ideally designed today and write the brief to `knowledge/DESIGN.md` — [references/design-research.md](references/design-research.md).
 
 ## Deployment (summary)
 
@@ -174,9 +174,12 @@ Before delivering the structure or changing code, verify:
 - No cross-module service/repository imports, FKs, or joins?
 - Backend watcher fixed by stack? Migration tool fixed for Go/NestJS (asked for Express)?
 - For Go: golang-migrate, sqlc, `database/sql` — not GORM?
-- Frontend uses React 19, Tailwind 4, react-router-dom, lazy routes, Zustand, Zod, Axios, `@/*`?
+- Frontend uses React 19, Tailwind 4, shadcn/ui (`components.json`, `cn` package), react-router-dom, lazy routes, Zustand, Zod, Axios, `@/*`?
 - Design researched before UI — current, dated sources (real products + design system + UX research) recorded with findings and direction in `knowledge/DESIGN.md`?
-- `frontend-design` used for UI, working from that brief? Shared components domain-agnostic? Theme centralized?
+- `frontend-design` used for UI, working from that brief? Shared components domain-agnostic?
+- Components use only semantic token classes — no raw colors? Every contract token still defined in `theme.css`?
+- Modules wired only through their registries (`registry.go` for Go, `app/routes/modules.ts`), `elco:*` markers intact?
+- Go: kernel present (`config`, `database`, `kernel`, `server`, `shared/`), `/readyz` pings the database, migrations timestamp-versioned?
 - Root commands `npm run dev:web` and `npm run dev:api` are separate?
 - Docker defaults to one app container + host-level database?
 - Deploy facts settled (slug, port from the playbook, GHCR owner, domain) — or left as markers on purpose?
