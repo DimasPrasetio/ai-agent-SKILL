@@ -39,12 +39,12 @@ func Conflict(message string) *Error     { return New(http.StatusConflict, messa
 
 // Validation is a 422 whose details list what was wrong with the input.
 func Validation(details any) *Error {
-	return &Error{Status: http.StatusUnprocessableEntity, Message: "Validation failed", Details: details}
+	return &Error{Status: http.StatusUnprocessableEntity, Message: "Data tidak valid", Details: details}
 }
 
 // Internal wraps an unexpected failure. Only the generic message reaches the client.
 func Internal(err error) *Error {
-	return &Error{Status: http.StatusInternalServerError, Message: "Internal server error", Err: err}
+	return &Error{Status: http.StatusInternalServerError, Message: "Terjadi kesalahan pada server", Err: err}
 }
 
 // As returns err as an *Error if one is in its chain.

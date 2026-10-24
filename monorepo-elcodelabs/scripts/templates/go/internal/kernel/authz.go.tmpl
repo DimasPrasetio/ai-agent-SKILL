@@ -97,7 +97,7 @@ func (s *AuthzSlot) Require(permission string, h http.Handler) http.Handler {
 	}
 	return s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.Can(r.Context(), permission) {
-			response.Fail(w, http.StatusForbidden, "You do not have permission to do this", nil)
+			response.Fail(w, http.StatusForbidden, "Anda tidak memiliki izin untuk melakukan ini", nil)
 			return
 		}
 		h.ServeHTTP(w, r)

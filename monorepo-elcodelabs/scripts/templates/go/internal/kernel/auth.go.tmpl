@@ -45,7 +45,7 @@ func (s *AuthSlot) Require(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := s.provider()
 		if p == nil {
-			response.Fail(w, http.StatusUnauthorized, "Authentication is not configured", nil)
+			response.Fail(w, http.StatusUnauthorized, "Autentikasi belum dikonfigurasi", nil)
 			return
 		}
 		p.Require(h).ServeHTTP(w, r)

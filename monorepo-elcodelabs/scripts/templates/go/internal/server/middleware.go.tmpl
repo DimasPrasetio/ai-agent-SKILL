@@ -86,7 +86,7 @@ func recoverPanics(next http.Handler) http.Handler {
 					panic(v)
 				}
 				logger.From(r.Context()).Error("panic", "value", v, "stack", string(debug.Stack()))
-				response.Fail(w, http.StatusInternalServerError, "Internal server error", nil)
+				response.Fail(w, http.StatusInternalServerError, "Terjadi kesalahan pada server", nil)
 			}
 		}()
 		next.ServeHTTP(w, r)

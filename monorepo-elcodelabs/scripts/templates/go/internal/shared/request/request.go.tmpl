@@ -23,15 +23,15 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		var tooLarge *http.MaxBytesError
 		switch {
 		case errors.As(err, &tooLarge):
-			return apperror.New(http.StatusRequestEntityTooLarge, "Request body is too large")
+			return apperror.New(http.StatusRequestEntityTooLarge, "Isi permintaan terlalu besar")
 		case errors.Is(err, io.EOF):
-			return apperror.BadRequest("Request body is empty")
+			return apperror.BadRequest("Isi permintaan kosong")
 		default:
-			return apperror.BadRequest("Request body is not valid JSON: " + err.Error())
+			return apperror.BadRequest("Isi permintaan bukan JSON yang valid: " + err.Error())
 		}
 	}
 	if dec.More() {
-		return apperror.BadRequest("Request body must contain a single JSON object")
+		return apperror.BadRequest("Isi permintaan harus berupa satu objek JSON")
 	}
 	return nil
 }
@@ -40,7 +40,7 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 func PathInt64(r *http.Request, name string) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue(name), 10, 64)
 	if err != nil || id <= 0 {
-		return 0, apperror.BadRequest("Invalid " + name)
+		return 0, apperror.BadRequest("Parameter " + name + " tidak valid")
 	}
 	return id, nil
 }

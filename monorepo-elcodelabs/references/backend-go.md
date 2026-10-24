@@ -191,10 +191,12 @@ modules may rely on; record what in the comment above `Version`.
 |---|---|
 | 1 | `Deps` (`Config`, `DB`, `Log`, `Auth`), `shared/`, the module registries |
 | 2 | `Deps.Authz` (`authz.go`); web: `shared/access.tsx` (`useCan`), `shared/app-events.ts`, `FrontendModule.provider`, `NavItem.permission`, `shared/kernel.ts` |
+| 3 | web: `shared/lib/field-classes.ts` (`FIELD`), the Bingkai Navy primitives (`button` with `loading`, `input`, `card`, `dialog`), the `--animate-loader-slide` token in `theme.css`; Indonesian default messages in the kernel and starter pages |
 
 A project scaffolded on an older kernel moves up by copying the new kernel files from this
 skill's `scripts/templates/` (for 2: `internal/kernel/authz.go`, the `Authz` field in `Deps`,
-its construction in `main.go`, and the web files above), then raising both version numbers.
+its construction in `main.go`, and the web files above; for 3: `web/field-classes.ts`, the
+`web/primitives/*`, and the `@theme` block of `web/theme.css`), then raising both version numbers.
 
 ## Module contract and the registry
 

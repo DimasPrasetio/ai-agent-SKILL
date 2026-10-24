@@ -30,12 +30,12 @@ func (v *Validator) Check(ok bool, field, message string) {
 
 // Required checks that value is not blank.
 func (v *Validator) Required(field, value string) {
-	v.Check(strings.TrimSpace(value) != "", field, "is required")
+	v.Check(strings.TrimSpace(value) != "", field, "wajib diisi")
 }
 
 // MaxLen checks that value has at most n characters.
 func (v *Validator) MaxLen(field, value string, n int) {
-	v.Check(utf8.RuneCountInString(value) <= n, field, "is too long")
+	v.Check(utf8.RuneCountInString(value) <= n, field, "terlalu panjang")
 }
 
 // Email checks that a non-empty value is a single plain address.
@@ -44,7 +44,7 @@ func (v *Validator) Email(field, value string) {
 		return
 	}
 	a, err := mail.ParseAddress(value)
-	v.Check(err == nil && a.Address == value, field, "must be a valid email address")
+	v.Check(err == nil && a.Address == value, field, "harus berupa alamat email yang valid")
 }
 
 // Valid reports whether nothing was recorded.

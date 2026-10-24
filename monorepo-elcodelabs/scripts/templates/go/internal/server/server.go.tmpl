@@ -25,7 +25,7 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux) error) (*http.Server,
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := database.Ping(r.Context(), d.DB, 2*time.Second); err != nil {
 			d.Log.Warn("readyz: database unreachable", "err", err)
-			response.Fail(w, http.StatusServiceUnavailable, "database unreachable", nil)
+			response.Fail(w, http.StatusServiceUnavailable, "Database tidak dapat dihubungi", nil)
 			return
 		}
 		response.OK(w, "ready", nil)
@@ -38,7 +38,7 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux) error) (*http.Server,
 	// An unknown API path answers a JSON 404 instead of falling through to the SPA.
 	// http.ServeMux picks the most specific pattern, so every route above still wins.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		response.Fail(w, http.StatusNotFound, "Route not found", nil)
+		response.Fail(w, http.StatusNotFound, "Rute tidak ditemukan", nil)
 	})
 	if dir := d.Config.PublicDir; dir != "" {
 		if _, err := os.Stat(dir); err == nil {

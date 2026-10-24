@@ -669,6 +669,9 @@ Applies to: \`apps/web/**\`.
 - UI foundation is shadcn/ui on Radix: primitives in \`shared/components/primitives\` (add more with
   \`npx shadcn@latest add <name>\`), generic compositions in \`shared/components/ui\`, page patterns
   in \`shared/components/patterns\`. Merge classes with \`cn\` from the \`cn\` package.
+- Before writing a generic component, check the library UI kits (ui-core, ui-data, ui-forms,
+  ui-feedback — see the module-library catalog); field-like controls use \`FIELD\` from
+  \`shared/lib/field-classes.ts\`. User-facing copy is Indonesian unless the project says otherwise.
 - Color, type, radius, and elevation come only from \`src/theme/theme.css\`, through semantic
   classes (\`bg-card\`, \`text-muted-foreground\`, \`border-border\`, \`text-destructive\`, …). No raw
   colors in components (hex, \`bg-blue-600\`, \`text-[#…]\`). Token names are a contract: change
@@ -1246,7 +1249,7 @@ file("apps/web/package.json", JSON.stringify({
 }, null, 2) + "\n");
 
 file("apps/web/index.html", `<!doctype html>
-<html lang="en">
+<html lang="id">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -1267,6 +1270,18 @@ import path from "node:path";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
+  build: {
+    rollupOptions: {
+      output: {
+        // Libraries change less often than the app: in their own chunks they stay cached
+        // across deploys.
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          ui: ["radix-ui", "lucide-react"],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     // Same origin in dev, same as the single-container production model.
@@ -1345,7 +1360,7 @@ file("apps/web/src/shared/kernel.ts", `/**
  * apps/api/internal/kernel (see the changelog there). Library modules state the minimum they
  * need; the module installer reads it from here when a project has no Go API.
  */
-export const KERNEL_VERSION = 2;
+export const KERNEL_VERSION = 3;
 `);
 
 file("apps/web/src/shared/access.tsx", `import { createContext, useContext } from "react";
@@ -1596,7 +1611,7 @@ export function LoadingState() {
   return (
     <div className="flex min-h-screen items-center justify-center gap-2 text-muted-foreground">
       <Spinner />
-      <span aria-hidden="true">Loading…</span>
+      <span aria-hidden="true">Memuat…</span>
     </div>
   );
 }
@@ -1605,8 +1620,8 @@ export function LoadingState() {
 file("apps/web/src/modules/auth/schemas/login.schema.ts", `import { z } from "zod";
 
 export const loginSchema = z.object({
-  email: z.string().email("Invalid email"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  email: z.string().email("Email tidak valid"),
+  password: z.string().min(8, "Kata sandi minimal 8 karakter"),
 });
 
 export type LoginFormValues = z.infer<typeof loginSchema>;
@@ -1649,8 +1664,8 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="font-display text-xl">Sign in</CardTitle>
-          <CardDescription>Use your account to continue.</CardDescription>
+          <CardTitle className="font-display text-xl">Masuk</CardTitle>
+          <CardDescription>Gunakan akun Anda untuk melanjutkan.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} noValidate className="grid gap-4">
@@ -1667,7 +1682,7 @@ export default function LoginPage() {
               {errors.email && <p id="email-error" className="text-sm text-destructive">{errors.email}</p>}
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">Kata sandi</Label>
               <Input
                 id="password"
                 name="password"
@@ -1678,7 +1693,7 @@ export default function LoginPage() {
               />
               {errors.password && <p id="password-error" className="text-sm text-destructive">{errors.password}</p>}
             </div>
-            <Button type="submit" className="w-full">Sign in</Button>
+            <Button type="submit" className="w-full">Masuk</Button>
           </form>
         </CardContent>
       </Card>
@@ -1722,7 +1737,7 @@ export const useHealthStore = create<HealthState>((set) => ({
       const result = await fetchHealth();
       set({ status: "success", result });
     } catch (err) {
-      set({ status: "error", error: err instanceof Error ? err.message : "Unknown error" });
+      set({ status: "error", error: err instanceof Error ? err.message : "Kesalahan tidak diketahui" });
     }
   },
 }));
@@ -1745,7 +1760,7 @@ export default function DashboardPage() {
       <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>API health</CardTitle>
+          <CardTitle>Kesehatan API</CardTitle>
           <CardDescription>GET /api/v1/health</CardDescription>
         </CardHeader>
         <CardContent>
@@ -1855,7 +1870,7 @@ function failure(err: unknown): ApiFailure | undefined {
 }
 
 /** The API's own message for a failed request, or a plain fallback when there is none. */
-export function apiErrorMessage(err: unknown, fallback = "Request failed. Please try again."): string {
+export function apiErrorMessage(err: unknown, fallback = "Permintaan gagal. Coba lagi."): string {
   return failure(err)?.message ?? (err instanceof Error && !axios.isAxiosError(err) ? err.message : fallback);
 }
 
@@ -1889,6 +1904,7 @@ file("apps/web/src/styles/globals.css", `/* App-wide styles beyond the theme. Ta
 for (const p of ["badge", "button", "card", "dialog", "input", "label", "skeleton", "spinner"]) {
   template(`web/primitives/${p}.tsx`, `apps/web/src/shared/components/primitives/${p}.tsx`);
 }
+template("web/field-classes.ts", "apps/web/src/shared/lib/field-classes.ts");
 
 // Frontend empty dirs (structure scaffold) — modules with real content still get the
 // remaining stub subfolders so every module has the full seven-folder shape (P2-15).
@@ -1909,7 +1925,7 @@ keep(
   "apps/web/public",
   "apps/web/src/shared/components/ui", "apps/web/src/shared/components/patterns",
   "apps/web/src/shared/layouts", "apps/web/src/shared/stores", "apps/web/src/shared/hooks",
-  "apps/web/src/shared/lib", "apps/web/src/shared/constants",
+  "apps/web/src/shared/constants",
 );
 
 // ---------------------------------------------------------------------------

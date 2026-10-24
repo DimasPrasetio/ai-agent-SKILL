@@ -74,7 +74,8 @@ moves up first ([backend-go.md](backend-go.md#kernel-versions)).
 writes its lines between the `elco:*` markers (Go registry, `sqlc.yaml`, `app/modules.ts`), its
 npm dependencies, its env names into `.env.example`, its row into `knowledge/MODULE_MAP.md`, and
 records everything in `modules.lock.json`. It refuses — changing nothing — when a required port
-is unwired, a ui kit is missing, or the kernel version differs.
+is unwired or the kernel is older than the module needs. Missing ui kits a module lists are
+added first, automatically (`upgrade` does the same when a new version needs a new kit).
 
 Then, as `add` prints: `npm install` · `cd apps/api && go mod tidy` · `npm run sqlc:generate` ·
 set the required env values in `.env` · `npm run migrate:up` · build and run.

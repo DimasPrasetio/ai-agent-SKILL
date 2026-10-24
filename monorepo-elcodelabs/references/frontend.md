@@ -72,6 +72,30 @@ built on it — a project on another foundation could not install them.
   `input`, `label`, `skeleton`, `spinner`. Add the rest when a screen needs them.
 - Icons: `lucide-react`. Anything beyond the foundation (toasts, command palette, charts,
   fonts) arrives with the module or preset that needs it, not up front.
+- The scaffold's primitives are already styled the way the library's kits expect: `Button`
+  variants mean `default` = primary, `outline` = secondary (bordered card surface with the card
+  shadow), `ghost` = quiet text-primary action, `destructive` = danger; sizes `sm` 32px,
+  `default` 36px, `lg` 44px; `loading` shows a spinner and disables the button. Every text
+  field, select trigger, and textarea shares one look through `FIELD` in
+  `shared/lib/field-classes.ts` — use it for any new field-like control instead of restating
+  the classes.
+
+### UI kits: check them before writing a component
+
+Generic UI beyond the primitives comes from four library kits, installed into `shared/` (and
+auto-added by `module.mjs add`/`upgrade` when a module needs them):
+
+| Kit | What it gives |
+| --- | --- |
+| `ui-core` | More primitives (table, select, tabs, popover, sheet, switch, …) and the page vocabulary: `Page`, `PageHeader`, `SectionCard`, `SummaryCard`, `StatusBadge` (tones success/warning/danger/info/neutral/muted), `Notice`, empty/error/not-found states, skeletons, `DescriptionList`, `Money`/`Qty`/`DocNumber`, `Modal`, `FormSheet`, `lib/format` (id-ID). |
+| `ui-data` | `DataTable` (sort, selection + bulk actions, column chooser, loading/error/empty), `Pagination`, `Toolbar`, `FilterBar`, `SearchInput`, `ActionMenu`, `NavTabs`. |
+| `ui-forms` | `FormField` (label, hint, error, aria wiring), `PasswordInput`, `SearchSelect`, `AsyncSearchSelect`, `HierarchicalSelect`, `Segmented`, `MultiToggle`, `DateRangeFields`, `KeyValueEditor`, `LineItemsEditor`, `FileDropzone`, `Stepper`, form layout parts. |
+| `ui-feedback` | Toasts (`notify.success/error(err)`), a global request loader, `ConfirmDialog`, `ReasonDialog`, error boundary. Registers its provider through `FrontendModule.provider`. |
+
+Before writing a generic component, look in these kits (the `ui-gallery` module renders all of
+them on one page). Default copy is Indonesian and every visible string is a prop, so a kit is
+adjusted by passing text, not by forking it. A component the kits lack is built in `shared/`
+in the same style and is a candidate to promote into a kit.
 
 ## Structure
 

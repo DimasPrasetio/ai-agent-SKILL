@@ -319,3 +319,26 @@ memasang ulang skill ke `~/.claude/skills`; `dev:api` lewat `air` belum teruji d
   tampilan Roles, detail role, dan UI Viewer dicek di browser; drift check dan smoke test skill
   hijau.
 
+
+### UI kits (24 Oktober 2026)
+
+- **Tujuan**: desain komponen mini-erp-v2 (tombol, field, tabel, select, dropdown, status,
+  notice, dialog) ditulis ulang menjadi kit library yang dipakai semua modul — desainnya saja,
+  bukan mekanismenya. Teks bawaan berbahasa Indonesia, semua teks bisa diganti lewat props.
+- **Empat kit**: `ui-core` 0.2.0 (primitive tambahan, Page/PageHeader/SectionCard/SummaryCard,
+  StatusBadge, Notice, state kosong/galat, skeleton, Money/Qty/DocNumber, Modal, FormSheet,
+  format id-ID), `ui-data` 0.1.0 (DataTable, Pagination, Toolbar, FilterBar, SearchInput,
+  ActionMenu, NavTabs), `ui-forms` 0.1.0 (FormField, PasswordInput, SearchSelect,
+  AsyncSearchSelect, HierarchicalSelect, Segmented, LineItemsEditor, FileDropzone, Stepper, …),
+  `ui-feedback` 0.1.0 (toast `notify`, global loader, ConfirmDialog, ReasonDialog, error
+  boundary; provider lewat `FrontendModule.provider`). Modul `ui-gallery` menampilkan semuanya.
+- **Skill (kernel v3)**: primitive scaffold (button dengan `loading`, input, card, dialog,
+  spinner) memakai desain yang sama; `FIELD` di `shared/lib/field-classes.ts`; pesan API dan
+  halaman awal berbahasa Indonesia; `manualChunks` di Vite; dokumentasi kit di `frontend.md`.
+- **Modul**: `users` 0.3.0, `auth` 0.3.0, `rbac` 0.2.0 (migrasi 002 untuk deskripsi
+  Administrator), `app-shell` 0.3.0 — memakai kit dan berbahasa Indonesia.
+- **Installer**: `add`/`upgrade` memasang kit yang belum ada; file yang pindah antar modul
+  diambil alih bila belum diubah proyek; versi migrasi memakai detik UTC yang valid.
+- **Bukti**: lima skenario testbed hijau; upgrade nyata dari versi sebelumnya (`upgrade --all`)
+  menambah kit, memindahkan file, menambah migrasi 002, lalu vet/tes/build/migrate hijau;
+  galeri dibandingkan berdampingan dengan komponen asli mini-erp-v2 di browser.

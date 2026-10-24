@@ -16,7 +16,10 @@ import (
 //	1  Deps (Config, DB, Log, Auth), shared/, the module registry
 //	2  Deps.Authz: permissions declared by modules, an authorization provider slot;
 //	   web: useCan / AccessContext, FrontendModule.provider, NavItem.permission, app events
-const Version = 2
+//	3  web: shared/lib/field-classes.ts (FIELD), Bingkai Navy primitives (Button loading prop,
+//	   outline/secondary/ghost restyled), the --animate-loader-slide theme token;
+//	   Indonesian default messages in the API and the starter pages
+const Version = 3
 
 // Deps is what a module's New receives. A module keeps what it needs from it and never
 // reaches for globals instead.
