@@ -84,9 +84,12 @@ apps/web/
 │   │   ├── providers/
 │   │   │   ├── AppProvider.tsx
 │   │   │   └── RouterProvider.tsx
+│   │   ├── modules.ts           # module registry (elco:* markers)
+│   │   ├── composition.ts       # nav + slots gathered from the registry
+│   │   ├── layouts/
+│   │   │   └── BareLayout.tsx   # frame for protected pages until a layout module is installed
 │   │   └── routes/
-│   │       ├── index.tsx        # builds the router from the registry
-│   │       ├── modules.ts       # module registry (elco:* markers)
+│   │       ├── index.tsx        # builds the router: public, then guard → layout → protected
 │   │       └── route-paths.ts   # app-level paths only
 │   ├── modules/
 │   │   ├── auth/
@@ -97,7 +100,7 @@ apps/web/
 │   │   │   ├── stores/
 │   │   │   ├── hooks/
 │   │   │   ├── types/
-│   │   │   └── routes.tsx       # the module's paths + lazy pages
+│   │   │   └── module.tsx       # FrontendModule: paths, lazy pages, nav, slots
 │   │   └── dashboard/
 │   ├── shared/
 │   │   ├── components/
@@ -108,14 +111,17 @@ apps/web/
 │   │   ├── layouts/
 │   │   ├── services/
 │   │   │   ├── http-client.ts
+│   │   │   ├── api-error.ts     # apiErrorMessage, apiFieldErrors (the API's own messages)
 │   │   │   └── api-endpoints.ts
 │   │   ├── stores/
 │   │   ├── hooks/
 │   │   ├── lib/             # formatter.ts, storage.ts
-│   │   ├── types/           # module-routes.ts, api.ts, pagination.ts
+│   │   ├── composition.tsx  # NavItem, slots, useNavItems / useSlot
+│   │   ├── types/           # frontend-module.ts, api.ts, pagination.ts
 │   │   └── constants/
 │   ├── theme/
-│   │   └── theme.css        # Tailwind entry + the token contract
+│   │   ├── theme.css        # Tailwind entry + the token contract
+│   │   └── fonts.ts         # font imports (a preset replaces it)
 │   ├── styles/
 │   │   └── globals.css
 │   ├── main.tsx
@@ -149,16 +155,26 @@ Rules:
   goes through `shared/` (`http-client` hooks, shared stores, types); composing modules on one
   screen happens in `app/`. This is what lets a module be installed from the library on its own.
 
-## Routing and lazy loading
+## Modules, routing, and composition
 
-Use `react-router-dom`; routes/pages must be lazy-loaded. Each module owns its routes in
-`modules/<module>/routes.tsx` and is registered in `app/routes/modules.ts` — the frontend's one
-registry, which the module library installs into:
+Use `react-router-dom`; pages must be lazy-loaded. Each module describes itself in
+`modules/<module>/module.tsx` as a `FrontendModule` and is registered in `app/modules.ts` — the
+frontend's one registry, which the module library installs into. A module never imports another
+module; everything it contributes goes through this object:
+
+| Field | What it contributes |
+|---|---|
+| `public` / `protected` | Its routes. Protected routes sit behind the guard and inside the layout. |
+| `nav` | Entries for the app's navigation (`label`, `to`, `icon`, `group`, `order`). |
+| `slots` | Content for named places in the layout (`"sidebar-footer"`, `"header-end"`). |
+| `guard` | An element wrapping every protected route (renders `<Outlet />` when allowed). One module at most — normally auth. |
+| `layout` | The frame around protected pages (renders `<Outlet />`). One module at most — normally the app shell. |
 
 ```tsx
-// modules/dashboard/routes.tsx
+// modules/dashboard/module.tsx
 import { lazy } from "react";
-import type { ModuleRoutes } from "@/shared/types/module-routes";
+import { LayoutDashboard } from "lucide-react";
+import type { FrontendModule } from "@/shared/types/frontend-module";
 
 const DashboardPage = lazy(() => import("@/modules/dashboard/pages/DashboardPage"));
 
@@ -166,32 +182,41 @@ export const DASHBOARD_PATHS = {
   home: "/dashboard",
 } as const;
 
-export const dashboardRoutes: ModuleRoutes = {
+export const dashboardModule: FrontendModule = {
+  id: "dashboard",
   protected: [{ path: DASHBOARD_PATHS.home, element: <DashboardPage /> }],
+  nav: [{ label: "Dashboard", to: DASHBOARD_PATHS.home, icon: LayoutDashboard, order: 0 }],
 };
 ```
 
 ```ts
-// app/routes/modules.ts
-// elco:routes:imports:begin
-import { authRoutes } from "@/modules/auth/routes";
-import { dashboardRoutes } from "@/modules/dashboard/routes";
-// elco:routes:imports:end
+// app/modules.ts
+// elco:modules:imports:begin
+import { authModule } from "@/modules/auth/module";
+import { dashboardModule } from "@/modules/dashboard/module";
+// elco:modules:imports:end
 
-export const moduleRoutes: ModuleRoutes[] = [
-  // elco:routes:begin
-  authRoutes,
-  dashboardRoutes,
-  // elco:routes:end
+export const frontendModules: FrontendModule[] = [
+  // elco:modules:begin
+  authModule,
+  dashboardModule,
+  // elco:modules:end
 ];
 ```
 
-- `app/routes/index.tsx` builds the router from the registry, keeping public and protected
-  routes apart so an auth guard can wrap the protected ones in a layout route.
-- A module's paths live in its own `routes.tsx`; `app/routes/route-paths.ts` holds app-level
+- `app/routes/index.tsx` builds the router: public routes, then the protected routes nested in
+  the layout, nested in the guard. `app/composition.ts` gathers `nav` and `slots`;
+  `App.tsx` provides them, and the layout reads them with `useNavItems()` / `useSlot()` from
+  `@/shared/composition`. This is how an app shell shows a user menu from auth without either
+  importing the other.
+- A module's paths live in its own `module.tsx`; `app/routes/route-paths.ts` holds app-level
   paths only. Installing a module never edits a file outside the registry.
 - Keep the `elco:*` markers; add registrations between them.
-- Use layouts at the route level. Wrap lazy pages in Suspense/loading states.
+- Wrap lazy pages in Suspense/loading states.
+- Pages have no outer frame or padding of their own: the layout owns them (`BareLayout` until a
+  layout module such as the library's app shell is registered).
+- Show the API's own error message (`apiErrorMessage`) and map 422 field errors onto the form
+  (`apiFieldErrors`); never a generic "Something went wrong" when the API said why.
 
 ## Zustand
 
@@ -334,8 +359,9 @@ follows `<html data-density="compact|comfortable">` through `--row-py`.
 
 A preset is a ready-made set of token values plus the fonts that go with them, kept in the
 module library (`elcodelabs-modules`, `themes/<name>/`), e.g. `bingkai-navy` for dense
-back-office apps. Applying one replaces the values in `theme.css` and installs its fonts. The
-library is still being built: until a preset is published there, set the values directly from
+back-office apps. Applying one (`module.mjs preset <id>` — see
+[module-library.md](module-library.md)) replaces `theme.css` (same token names, its own values)
+and `fonts.ts`, and adds the font packages. With no fitting preset, set the values directly from
 the design brief. Which preset (if any) a project uses
 is a design decision recorded in `knowledge/DESIGN.md` — see
 [design-research.md](design-research.md).

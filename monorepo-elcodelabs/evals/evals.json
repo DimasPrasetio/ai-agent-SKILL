@@ -121,6 +121,23 @@
         "No competitor branding, logos, or copy were copied into the project",
         "UI implementation follows the brief and uses the frontend-design skill; theme values live in apps/web/src/theme/"
       ]
+    },
+    {
+      "id": 7,
+      "eval_name": "go-assemble-from-library",
+      "prompt": "Buatkan project back-office gudang bernama \"stok-gudang\": backend Go, frontend React. Staff harus login dengan email dan password, admin bisa kelola akun staff, lalu ada modul produk dan stok. Pakai modul dari library yang sudah ada kalau cocok. Jangan deploy.",
+      "expected_output": "Scaffolds a Go project, reads the module library catalog, presents one install/adapt/build table for confirmation (auth + users + app-shell + ui-core installed, products/stock built), installs with module.mjs in dependency order with UserStore wired to users, and builds products/stock as custom modules that import no other module.",
+      "files": [],
+      "assertions": [
+        "Reads the library CATALOG.md (or module.mjs list) before writing feature code",
+        "Shows one capability table (install / install + adapt / build) and asks for confirmation once before installing",
+        "Installs with module.mjs add (not by copying files): ui-core and app-shell before users, users before auth",
+        "Wires auth with --port UserStore=users",
+        "modules.lock.json exists after installing",
+        "Products and stock are built as new modules following the standard (ports/ for what they need, registered in registry.go and app/modules.ts)",
+        "No module imports another module (only the composition root does, through adapters)",
+        "Protected routes in custom modules use d.Auth.Require rather than importing auth"
+      ]
     }
   ]
 }

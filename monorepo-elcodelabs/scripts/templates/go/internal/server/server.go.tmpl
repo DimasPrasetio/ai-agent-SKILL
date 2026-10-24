@@ -13,9 +13,9 @@ import (
 	"__GO_MODULE__/internal/shared/response"
 )
 
-// New returns the server for d. register mounts the backend modules
-// (modules.Register).
-func New(d *kernel.Deps, register func(mux *http.ServeMux)) *http.Server {
+// New returns the server for d. register mounts the backend modules (modules.Register); its
+// error is returned as is.
+func New(d *kernel.Deps, register func(mux *http.ServeMux) error) (*http.Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		response.OK(w, "ok", nil)
@@ -31,7 +31,9 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux)) *http.Server {
 		response.OK(w, "ready", nil)
 	})
 
-	register(mux)
+	if err := register(mux); err != nil {
+		return nil, err
+	}
 
 	// An unknown API path answers a JSON 404 instead of falling through to the SPA.
 	// http.ServeMux picks the most specific pattern, so every route above still wins.
@@ -51,7 +53,7 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux)) *http.Server {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
-	}
+	}, nil
 }
 
 // spa serves dir, falling back to index.html for client-side routes.

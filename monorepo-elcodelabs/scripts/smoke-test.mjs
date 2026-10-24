@@ -204,15 +204,19 @@ import (
 )
 
 type Module struct {
-	q *sqlc.Queries
+	q    *sqlc.Queries
+	auth kernel.Authenticator
 }
 
-func New(d *kernel.Deps) *Module { return &Module{q: sqlc.New(d.DB)} }
+func New(d *kernel.Deps) (*Module, error) { return &Module{q: sqlc.New(d.DB), auth: d.Auth}, nil }
 
 func (m *Module) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/ping", func(w http.ResponseWriter, r *http.Request) {
 		response.OK(w, "pong", map[string]bool{"pong": true})
 	})
+	mux.Handle("GET /api/v1/ping/secure", m.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response.OK(w, "secret", nil)
+	})))
 }
 
 func (m *Module) Client() contracts.PingClient { return m }
@@ -231,7 +235,7 @@ func (m *Module) Count(ctx context.Context) (int64, error) { return m.q.CountPin
   };
   try {
     insertBefore("internal/modules/registry.go", "\t// elco:imports:end", `\t"${goModule}/internal/modules/ping"\n`);
-    insertBefore("internal/modules/registry.go", "\t// elco:modules:end", "\tpingModule := ping.New(d)\n\tpingModule.Routes(mux)\n");
+    insertBefore("internal/modules/registry.go", "\t// elco:modules:end", "\tpingModule, err := ping.New(d)\n\tif err != nil {\n\t\treturn err\n\t}\n\tpingModule.Routes(mux)\n");
     insertBefore("sqlc.yaml", "  # elco:sqlc:end", `  - engine: "mysql"
     schema: "migrations"
     queries: "internal/modules/ping/infrastructure/queries"
@@ -285,6 +289,11 @@ async function checkGoBinary(dir, fixtureInstalled) {
       const pingBody = await ping.json().catch(() => null);
       if (ping.status === 200 && pingBody?.data?.pong === true) pass("api binary → fixture module route mounted via registry");
       else fail(`fixture route answered ${ping.status} ${JSON.stringify(pingBody)}`);
+      // No module provides auth here, so the kernel's slot must refuse a guarded route.
+      const secure = await fetch(`http://localhost:${port}/api/v1/ping/secure`);
+      const secureBody = await secure.json().catch(() => null);
+      if (secure.status === 401 && secureBody?.success === false) pass("api binary → d.Auth.Require without a provider → 401");
+      else fail(`guarded fixture route answered ${secure.status} ${JSON.stringify(secureBody)}`);
     }
     if (!process.env.SMOKE_DB_DSN) skip("go: /readyz → 200 — set SMOKE_DB_DSN to a reachable MySQL to check it");
   } catch (err) {

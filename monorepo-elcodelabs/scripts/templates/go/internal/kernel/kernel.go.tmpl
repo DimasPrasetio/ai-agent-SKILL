@@ -20,4 +20,6 @@ type Deps struct {
 	Config *config.Config
 	DB     *sql.DB
 	Log    *slog.Logger
+	// Auth guards handlers; the auth provider module fills it (see AuthSlot).
+	Auth *AuthSlot
 }

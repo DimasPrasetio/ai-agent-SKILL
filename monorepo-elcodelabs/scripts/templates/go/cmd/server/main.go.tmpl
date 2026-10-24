@@ -45,8 +45,11 @@ func run() error {
 	}
 	defer db.Close()
 
-	deps := &kernel.Deps{Config: cfg, DB: db, Log: log}
-	srv := server.New(deps, func(mux *http.ServeMux) { modules.Register(mux, deps) })
+	deps := &kernel.Deps{Config: cfg, DB: db, Log: log, Auth: &kernel.AuthSlot{}}
+	srv, err := server.New(deps, func(mux *http.ServeMux) error { return modules.Register(mux, deps) })
+	if err != nil {
+		return err
+	}
 
 	// docker stop sends SIGTERM: finish in-flight requests before exiting.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -1,6 +1,8 @@
 # Rencana — Library Modul Reusable (`elcodelabs-modules`)
 
-> Status: **Fase 1 selesai (24 Oktober 2026)** — lihat [Hasil Fase 1](#hasil-fase-1). Fase 2–4 belum dimulai.
+> Status: **Fase 1–4 selesai (24 Oktober 2026)** — lihat [Hasil Fase 1](#hasil-fase-1),
+> [Hasil Fase 2](#hasil-fase-2), dan [Hasil Fase 3 dan 4](#hasil-fase-3-dan-4). Belum di-commit; repo library
+> belum di GitHub.
 > Disusun 24 Oktober 2026 dari diskusi desain.
 > `Plan.md` adalah riwayat pekerjaan sebelumnya dan tidak diubah oleh dokumen ini.
 
@@ -162,8 +164,9 @@ implementasi):
   standar `errors`. Ditambah `shared/request` (`DecodeJSON`, `PathInt64`).
 - **Migrasi baseline no-op** (`<timestamp>_baseline`) karena golang-migrate gagal `up` di
   direktori kosong — deploy pertama akan rusak tanpanya.
-- **`sqlc generate` gagal ("no packages") sampai modul pertama masuk** — batasan sqlc,
-  didokumentasikan di `backend-go.md` dan `sqlc.yaml`.
+- **`sqlc generate` gagal ("no packages") selama belum ada modul ber-query** — batasan sqlc.
+  Diperbaiki di Fase 2: `npm run sqlc:generate` lewat `scripts/sqlc.mjs` yang melewatinya
+  dengan pesan.
 - **Path route milik modul** ada di `routes.tsx` modul itu; `route-paths.ts` hanya path tingkat
   aplikasi. `/` dialihkan ke `/dashboard`.
 - **Aturan baru `.claude/rules/modules.md`** dibuat untuk ketiga stack (baris khusus Go hanya
@@ -205,6 +208,52 @@ Bukti gerbang:
   dengan adapter ke `users`, `auth` jalan dengan implementasi `UserStore` buatan project, dan
   setiap modul lolos tes sendirian.
 
+### Hasil Fase 2
+
+Repo library: `~/Documents/elcodelabs-modules` (lokal, belum di GitHub — lokasinya menunggu
+keputusan). Isinya:
+
+- **Format** `module.json` (JSON, bukan YAML, agar tooling tetap tanpa dependency) —
+  `docs/MODULE_FORMAT.md`. Kind: `fullstack`, `backend`, `web`, `ui`.
+- **Preset** `themes/bingkai-navy/` — nilai token, tipografi (base 14px), font, `DESIGN.md`;
+  hanya desain mini-erp-v2.
+- **Modul**: `ui-core` (12 primitives shadcn + 7 komponen: PageHeader, DataTable, PaginationBar,
+  FormField, EmptyState, ErrorState, ConfirmDialog), `app-shell` (bingkai navy: sidebar inset,
+  pil aktif, breadcrumb, slot), `users` (CRUD + bootstrap user pertama, menawarkan
+  `UserClient`), `auth` (login/logout/me, JWT di cookie HttpOnly + Bearer, batas percobaan,
+  guard + halaman login + menu user, port `UserStore`, mengisi `d.Auth`).
+- **Skrip**: `scripts/lib/install.mjs` (inti pemasangan untuk Fase 3), `scripts/catalog.mjs`
+  (validasi + `CATALOG.md`; ikut memeriksa "tidak ada modul yang meng-import modul lain"),
+  `scripts/testbed.mjs`, CI `.github/workflows/ci.yml` (butuh variabel `SKILL_REPO`/`SKILL_PATH`).
+
+Perubahan di skill yang ditemukan perlu saat membangun modul:
+
+- **`kernel.Auth` (AuthSlot)** — autentikasi jadi port tingkat kernel. Sebagai port per modul,
+  `users` (dijaga auth) dan `auth` (butuh users) akan saling bergantung.
+- **`New` modul dan `Register` mengembalikan `error`** — pengaturan wajib yang hilang
+  menghentikan API saat start dengan pesan jelas.
+- **Frontend `FrontendModule`** (`module.tsx`, registry `app/modules.ts`): selain route, modul
+  menyumbang `nav`, `slots`, `guard`, `layout`; `app/composition.ts` + `@/shared/composition`
+  menyalurkannya. `BareLayout` bawaan; halaman tanpa bingkai sendiri.
+- **`src/theme/fonts.ts`** — titik pasang font untuk preset.
+- **`shared/types/api.ts` + `shared/services/api-error.ts`** — tipe envelope dan pesan error API.
+- **`scripts/sqlc.mjs`** — `sqlc:generate` tidak gagal saat belum ada modul ber-query.
+
+Bukti:
+
+- Testbed hijau, tiga skenario. `full` (32 pemeriksaan, MySQL sungguhan): install lewat
+  penanda, gofmt, vet, 12 tes unit modul (port dipalsukan), build, lalu alur nyata — login,
+  cookie HttpOnly/SameSite=Lax, Bearer, CRUD, email duplikat 422, larangan menonaktifkan/hapus
+  diri 409, sesi berakhir saat user dinonaktifkan, logout, SPA dilayani. `auth-alone`: auth
+  jalan dengan `UserStore` buatan project tanpa modul users. `users-alone`: users jalan tanpa
+  auth, rute terjaga 401.
+- `catalog.mjs --check` hijau; pemeriksaan import antarmodul diuji dengan import sengaja.
+- Skill: drift check dan smoke test hijau untuk ketiga stack.
+- Tampilan dicek di browser: login terbelah, bingkai navy, halaman Users, dialog + validasi.
+
+Belum: CI library belum pernah jalan (repo belum di GitHub); `dev:api` via `air` belum teruji di
+mesin ini; skill di `~/.claude/skills` belum diperbarui ke versi ini.
+
 **Fase 3 — Installer `module.mjs`** (di repo library): `list`, `add` (ganti import path,
 nomori migrasi, tambah blok sqlc, daftarkan registry dan route, buat adapter bila provider port-nya modul library yang dikenal
 (selain itu laporkan port yang belum terpenuhi), tulis
@@ -214,3 +263,38 @@ nomori migrasi, tambah blok sqlc, daftarkan registry dan route, buat adapter bil
 **Fase 4 — Kembali ke skill**: `references/module-library.md` dan langkah perakitan di
 `SKILL.md` (baca katalog → pakai / adaptasi / buat baru → konfirmasi sekali → pasang → buat
 sisanya → uji).
+
+### Hasil Fase 3 dan 4
+
+**Fase 3 — CLI `scripts/module.mjs`** (di repo library): `list`, `info`, `add`, `preset`,
+`status`, `upgrade` (`<id>`, `preset`, `--all`), `detach`, `promote`.
+
+- `modules.lock.json` per modul: versi, commit library, wiring port, hash setiap file seperti
+  dirender library, migrasi yang terpasang, baris registry.
+- **Upgrade** merender modul pada commit yang tercatat (base) dan pada library sekarang (theirs),
+  lalu `git merge-file` ke file project (ours). Base diambil dari riwayat git library, jadi
+  project tidak menyimpan salinan cadangan. Migrasi forward-only: yang baru ditambah dengan
+  versi baru, yang sudah terpasang tidak pernah ditulis ulang. Baris registry diganti bila tidak
+  diedit, kalau diedit diberi catatan. Exit 2 = ada konflik.
+- **`add`** menolak tanpa mengubah apa pun bila port wajib belum di-wire, ui kit belum ada,
+  versi kernel beda, atau file sudah ada.
+- **`promote`** menyalin modul project ke library, membaca contracts/ports/tabel/env/route/baris
+  registry dari kode ke draf `module.json`, dan menolak modul yang meng-import modul lain.
+- Testbed skenario `lifecycle` (salinan library di repo git sementara): add + add yang ditolak,
+  status, upgrade yang menggabungkan perubahan project dan library lalu project tetap build,
+  upgrade yang konflik, detach, promote + promote yang ditolak.
+
+**Fase 4 — skill**: `references/module-library.md` (alur perakitan: baca katalog → kapabilitas
+→ install / install + adaptasi / bangun → konfirmasi sekali → pasang berurutan → bangun yang
+custom → catat; mengubah, upgrade, detach, promote). `SKILL.md`: langkah 3 "Assemble from the
+module library", deskripsi pemicu, tabel referensi, checklist. Aturan hasil scaffold
+`modules.md`: modul library hanya lewat `module.mjs`, `modules.lock.json` di-commit. Eval baru
+`go-assemble-from-library`. Lokasi library: `$ELCO_MODULES`, `~/elcodelabs-modules`, atau
+`~/Documents/elcodelabs-modules`.
+
+Bukti akhir: keempat skenario testbed hijau dengan MySQL; `catalog.mjs --check`; drift check
+dan smoke test skill hijau untuk ketiga stack (termasuk `/readyz` 200 dengan MySQL).
+
+Belum: commit kedua repo; repo library ke GitHub (lalu variabel CI `SKILL_REPO`/`SKILL_PATH`);
+memasang ulang skill ke `~/.claude/skills`; `dev:api` lewat `air` belum teruji di mesin ini.
+

@@ -178,7 +178,7 @@ const rootScripts = {
     "migrate:up": "node scripts/migrate.mjs up",
     "migrate:down": "node scripts/migrate.mjs down 1",
     "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations",
-    "sqlc:generate": "cd apps/api && sqlc generate",
+    "sqlc:generate": "node scripts/sqlc.mjs",
   },
   nestjs: {
     "dev:web": "npm run dev -w apps/web",
@@ -623,10 +623,12 @@ Applies to: \`apps/api/**\`.
 // Registries and markers are what the module library installs into (references/backend-go.md,
 // references/frontend.md). The backend registry exists for Go only, so far.
 const goModuleRules = backend === "go" ? [
-  "- Go: a module's package root exposes `New(d *kernel.Deps, <one value per port it needs>...)`,",
+  "- Go: a module's package root exposes `New(d *kernel.Deps, <one value per port it needs>...) (*Module, error)`,",
   "  `Routes(mux *http.ServeMux)`, and `Client()` when it offers a contract. `internal/modules` is",
   "  the composition root: `registry.go` builds a provider before the modules wired to it, and",
   "  each connection is an adapter in its own `adapter_<consumer>_<port>.go` beside it.",
+  "- Go: guard a handler with `d.Auth.Require(h)` and read the user with `d.Auth.UserID(ctx)`. The",
+  "  auth module fills that slot in `registry.go` with `d.Auth.Provide(...)` — never import it.",
   "- Go: a module owns its `sql:` block in `sqlc.yaml` and adds migrations with",
   "  `npm run migrate:create` (timestamp-versioned, so two branches never collide).",
   "- Go: `internal/kernel` and `internal/shared` are the kernel every module builds on. Change them",
@@ -636,11 +638,11 @@ const goModuleRules = backend === "go" ? [
 file(".claude/rules/modules.md", [
   "# Rule: Modules and registries",
   "",
-  `Applies to: ${backend === "go" ? "`apps/api/internal/**`, `apps/api/sqlc.yaml`, " : ""}\`apps/web/src/modules/**\`, \`apps/web/src/app/routes/**\`.`,
+  `Applies to: ${backend === "go" ? "`apps/api/internal/**`, `apps/api/sqlc.yaml`, " : ""}\`apps/web/src/modules/**\`, \`apps/web/src/app/**\`.`,
   "",
   backend === "go"
-    ? "- A module is wired in only through its registry: `apps/api/internal/modules/registry.go`\n  (backend) and `apps/web/src/app/routes/modules.ts` (frontend). Never mount its routes elsewhere."
-    : "- A frontend module is wired in only through `apps/web/src/app/routes/modules.ts`. Never mount\n  its routes elsewhere.",
+    ? "- A module is wired in only through its registry: `apps/api/internal/modules/registry.go`\n  (backend) and `apps/web/src/app/modules.ts` (frontend). Never mount it anywhere else."
+    : "- A frontend module is wired in only through `apps/web/src/app/modules.ts`. Never mount it\n  anywhere else.",
   "- Keep every `elco:*` marker. Tooling inserts lines between them — add yours between them too,",
   "  never around or instead of them.",
   "- A frontend module never imports another module. Shared needs go through `shared/`; putting",
@@ -648,6 +650,8 @@ file(".claude/rules/modules.md", [
   ...goModuleRules,
   "- Customize an installed module in new files of its own (e.g. `custom_*.go`, `Custom*.tsx`)",
   "  rather than editing the files it shipped with, so a later upgrade merges cleanly.",
+  "- Library modules are installed and upgraded only with the library's `module.mjs` (`add`,",
+  "  `upgrade`, `detach`) — never copied by hand. `modules.lock.json` records them; commit it.",
   "",
 ].join("\n"));
 file(".claude/rules/frontend-react.md", `# Rule: Frontend (React)
@@ -1308,6 +1312,7 @@ file("apps/web/src/vite-env.d.ts", `/// <reference types="vite/client" />\n`);
 file("apps/web/src/main.tsx", `import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "@/app/App";
+import "@/theme/fonts";
 import "@/styles/globals.css";
 
 createRoot(document.getElementById("root")!).render(
@@ -1319,11 +1324,15 @@ createRoot(document.getElementById("root")!).render(
 
 file("apps/web/src/app/App.tsx", `import { AppProvider } from "@/app/providers/AppProvider";
 import { RouterProvider } from "@/app/providers/RouterProvider";
+import { composition } from "@/app/composition";
+import { CompositionProvider } from "@/shared/composition";
 
 export default function App() {
   return (
     <AppProvider>
-      <RouterProvider />
+      <CompositionProvider value={composition}>
+        <RouterProvider />
+      </CompositionProvider>
     </AppProvider>
   );
 }
@@ -1350,7 +1359,7 @@ export function RouterProvider() {
 }
 `);
 
-// App-level paths only. A module owns its own paths in its routes.tsx, so installing a
+// App-level paths only. A module owns its own paths in its module.tsx, so installing a
 // module never edits this file.
 file("apps/web/src/app/routes/route-paths.ts", `export const ROUTE_PATHS = {
   home: "/",
@@ -1359,41 +1368,120 @@ file("apps/web/src/app/routes/route-paths.ts", `export const ROUTE_PATHS = {
 } as const;
 `);
 
-file("apps/web/src/shared/types/module-routes.ts", `import type { RouteObject } from "react-router-dom";
+file("apps/web/src/shared/types/frontend-module.ts", `import type { ReactNode } from "react";
+import type { RouteObject } from "react-router-dom";
+import type { NavItem, SlotName } from "@/shared/composition";
 
-/** What a frontend module exports from its routes.tsx. Pages must be lazy-loaded. */
-export interface ModuleRoutes {
-  /** Reachable without signing in. */
+/**
+ * What a frontend module exports from its module.tsx. Modules never import each other: they
+ * contribute routes, navigation, and slot content here, and app/ composes them.
+ */
+export interface FrontendModule {
+  id: string;
+  /** Reachable without signing in. Pages must be lazy-loaded. */
   public?: RouteObject[];
-  /** Behind the auth guard once an auth module provides one. */
+  /** Behind the guard (when a module provides one), inside the layout (likewise). */
   protected?: RouteObject[];
+  /** Entries for the app's navigation, rendered by whichever module provides the layout. */
+  nav?: NavItem[];
+  /** Content for named places in the layout, e.g. the user menu in "sidebar-footer". */
+  slots?: Partial<Record<SlotName, ReactNode>>;
+  /** Wraps all protected routes; renders <Outlet /> when access is allowed. At most one module. */
+  guard?: ReactNode;
+  /** The frame around protected pages; renders <Outlet />. At most one module. */
+  layout?: ReactNode;
 }
 `);
 
-file("apps/web/src/app/routes/modules.ts", `// Every frontend module's routes — the one place a module is registered.
+file("apps/web/src/shared/composition.tsx", `import { createContext, useContext } from "react";
+import type { ComponentType, ReactNode } from "react";
+
+/** One navigation entry a module contributes. */
+export interface NavItem {
+  label: string;
+  to: string;
+  icon?: ComponentType<{ className?: string }>;
+  /** Group heading; entries without one form the first, unlabeled group. */
+  group?: string;
+  /** Lower comes first within its group. */
+  order?: number;
+}
+
+/** Named places in the layout that modules can fill. */
+export type SlotName = "sidebar-footer" | "header-end";
+
+export interface Composition {
+  nav: NavItem[];
+  slots: Partial<Record<SlotName, ReactNode[]>>;
+}
+
+const CompositionContext = createContext<Composition>({ nav: [], slots: {} });
+
+/** Provided once by app/ from the registered modules. */
+export const CompositionProvider = CompositionContext.Provider;
+
+/** Navigation entries from every module, sorted by order. */
+export function useNavItems(): NavItem[] {
+  return useContext(CompositionContext).nav;
+}
+
+/** Everything modules put into the named slot, in registration order. */
+export function useSlot(name: SlotName): ReactNode[] {
+  return useContext(CompositionContext).slots[name] ?? [];
+}
+`);
+
+file("apps/web/src/app/modules.ts", `// Every frontend module — the one place a module is registered.
 // Tooling inserts lines between the elco:* markers. Keep the markers; add modules between
 // them, never around them.
-import type { ModuleRoutes } from "@/shared/types/module-routes";
-// elco:routes:imports:begin
-import { authRoutes } from "@/modules/auth/routes";
-import { dashboardRoutes } from "@/modules/dashboard/routes";
-// elco:routes:imports:end
+import type { FrontendModule } from "@/shared/types/frontend-module";
+// elco:modules:imports:begin
+import { authModule } from "@/modules/auth/module";
+import { dashboardModule } from "@/modules/dashboard/module";
+// elco:modules:imports:end
 
-export const moduleRoutes: ModuleRoutes[] = [
-  // elco:routes:begin
-  authRoutes,
-  dashboardRoutes,
-  // elco:routes:end
+export const frontendModules: FrontendModule[] = [
+  // elco:modules:begin
+  authModule,
+  dashboardModule,
+  // elco:modules:end
 ];
 `);
 
-file("apps/web/src/app/routes/index.tsx", `import { Navigate, createBrowserRouter } from "react-router-dom";
-import { ROUTE_PATHS } from "@/app/routes/route-paths";
-import { moduleRoutes } from "@/app/routes/modules";
+file("apps/web/src/app/composition.ts", `import type { Composition, SlotName } from "@/shared/composition";
+import { frontendModules } from "@/app/modules";
 
-const publicRoutes = moduleRoutes.flatMap((m) => m.public ?? []);
-// Wrap these in the auth guard's layout route once an auth module provides one.
-const protectedRoutes = moduleRoutes.flatMap((m) => m.protected ?? []);
+const slots: Composition["slots"] = {};
+for (const m of frontendModules) {
+  for (const [name, node] of Object.entries(m.slots ?? {})) {
+    (slots[name as SlotName] ??= []).push(node);
+  }
+}
+
+/** Navigation and slot content gathered from every registered module. */
+export const composition: Composition = {
+  nav: frontendModules
+    .flatMap((m) => m.nav ?? [])
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+  slots,
+};
+`);
+
+file("apps/web/src/app/routes/index.tsx", `import { Navigate, createBrowserRouter } from "react-router-dom";
+import type { RouteObject } from "react-router-dom";
+import { ROUTE_PATHS } from "@/app/routes/route-paths";
+import { frontendModules } from "@/app/modules";
+import { BareLayout } from "@/app/layouts/BareLayout";
+
+const publicRoutes = frontendModules.flatMap((m) => m.public ?? []);
+let protectedRoutes: RouteObject[] = frontendModules.flatMap((m) => m.protected ?? []);
+
+// A layout module frames the protected pages (BareLayout until one is installed); a guard
+// module decides who reaches them.
+const layout = frontendModules.find((m) => m.layout)?.layout ?? <BareLayout />;
+protectedRoutes = [{ element: layout, children: protectedRoutes }];
+const guard = frontendModules.find((m) => m.guard)?.guard;
+if (guard) protectedRoutes = [{ element: guard, children: protectedRoutes }];
 
 export const router = createBrowserRouter([
   { path: ROUTE_PATHS.home, element: <Navigate to={ROUTE_PATHS.start} replace /> },
@@ -1402,8 +1490,8 @@ export const router = createBrowserRouter([
 ]);
 `);
 
-file("apps/web/src/modules/auth/routes.tsx", `import { lazy } from "react";
-import type { ModuleRoutes } from "@/shared/types/module-routes";
+file("apps/web/src/modules/auth/module.tsx", `import { lazy } from "react";
+import type { FrontendModule } from "@/shared/types/frontend-module";
 
 const LoginPage = lazy(() => import("@/modules/auth/pages/LoginPage"));
 
@@ -1411,13 +1499,15 @@ export const AUTH_PATHS = {
   login: "/login",
 } as const;
 
-export const authRoutes: ModuleRoutes = {
+export const authModule: FrontendModule = {
+  id: "auth",
   public: [{ path: AUTH_PATHS.login, element: <LoginPage /> }],
 };
 `);
 
-file("apps/web/src/modules/dashboard/routes.tsx", `import { lazy } from "react";
-import type { ModuleRoutes } from "@/shared/types/module-routes";
+file("apps/web/src/modules/dashboard/module.tsx", `import { lazy } from "react";
+import { LayoutDashboard } from "lucide-react";
+import type { FrontendModule } from "@/shared/types/frontend-module";
 
 const DashboardPage = lazy(() => import("@/modules/dashboard/pages/DashboardPage"));
 
@@ -1425,8 +1515,10 @@ export const DASHBOARD_PATHS = {
   home: "/dashboard",
 } as const;
 
-export const dashboardRoutes: ModuleRoutes = {
+export const dashboardModule: FrontendModule = {
+  id: "dashboard",
   protected: [{ path: DASHBOARD_PATHS.home, element: <DashboardPage /> }],
+  nav: [{ label: "Dashboard", to: DASHBOARD_PATHS.home, icon: LayoutDashboard, order: 0 }],
 };
 `);
 
@@ -1581,7 +1673,7 @@ export default function DashboardPage() {
   }, [check]);
 
   return (
-    <main className="min-h-screen bg-background p-8">
+    <div>
       <h1 className="font-display text-2xl font-semibold">Dashboard</h1>
       <Card className="mt-4">
         <CardHeader>
@@ -1596,6 +1688,19 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+`);
+
+// Pages carry no outer padding or frame of their own: the layout owns them.
+file("apps/web/src/app/layouts/BareLayout.tsx", `import { Outlet } from "react-router-dom";
+
+/** The frame around protected pages until a layout module (an app shell) is installed. */
+export function BareLayout() {
+  return (
+    <main className="min-h-screen bg-background p-4 md:p-8">
+      <Outlet />
     </main>
   );
 }
@@ -1641,6 +1746,61 @@ httpClient.interceptors.response.use(undefined, (error: unknown) => {
 });
 `);
 
+file("apps/web/src/shared/types/api.ts", `// The API envelope (.claude/rules/api-standard.md), as the frontend sees it.
+
+export interface ApiSuccess<T> {
+  success: true;
+  message: string;
+  data: T;
+}
+
+export interface PageMeta {
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+}
+
+export interface ApiPage<T> extends ApiSuccess<T[]> {
+  meta: PageMeta;
+}
+
+export interface ApiFieldError {
+  field: string;
+  message: string;
+}
+
+export interface ApiFailure {
+  success: false;
+  message: string;
+  errors: ApiFieldError[] | unknown[];
+}
+`);
+
+file("apps/web/src/shared/services/api-error.ts", `import axios from "axios";
+import type { ApiFailure, ApiFieldError } from "@/shared/types/api";
+
+function failure(err: unknown): ApiFailure | undefined {
+  if (!axios.isAxiosError(err)) return undefined;
+  const body = err.response?.data as Partial<ApiFailure> | undefined;
+  return body && body.success === false ? (body as ApiFailure) : undefined;
+}
+
+/** The API's own message for a failed request, or a plain fallback when there is none. */
+export function apiErrorMessage(err: unknown, fallback = "Request failed. Please try again."): string {
+  return failure(err)?.message ?? (err instanceof Error && !axios.isAxiosError(err) ? err.message : fallback);
+}
+
+/** Field errors from a 422 (validator.FieldError on the backend), keyed by field name. */
+export function apiFieldErrors(err: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const e of (failure(err)?.errors ?? []) as ApiFieldError[]) {
+    if (e && typeof e.field === "string") out[e.field] ??= e.message;
+  }
+  return out;
+}
+`);
+
 file("apps/web/src/shared/services/api-endpoints.ts", `export const API = {
   base: "/api/v1",
 } as const;
@@ -1649,6 +1809,10 @@ file("apps/web/src/shared/services/api-endpoints.ts", `export const API = {
 // theme.css is the Tailwind entry and the token contract (references/frontend.md);
 // globals.css holds app-wide styles beyond it.
 template("web/theme.css", "apps/web/src/theme/theme.css");
+file("apps/web/src/theme/fonts.ts", `// Font imports for the theme (e.g. "@fontsource-variable/inter"). The scaffold uses system
+// fonts; a preset replaces this file together with theme.css.
+export {};
+`);
 file("apps/web/src/styles/globals.css", `/* App-wide styles beyond the theme. Tailwind and every token come from theme.css. */
 @import "../theme/theme.css";
 `);
@@ -1723,8 +1887,8 @@ time = true
 clean_on_exit = true
 `);
   // Every module adds its own sql: block between the markers (one generated package per
-  // module keeps its generated queries private to it). sqlc refuses a config with no block at all
-  // ("no packages"), so `npm run sqlc:generate` only works once the first module is in.
+  // module keeps its generated queries private to it). sqlc refuses a config with no block at
+  // all ("no packages"); scripts/sqlc.mjs skips it until a module with queries is in.
   file("apps/api/sqlc.yaml", `version: "2"
 sql:
   # elco:sqlc:begin
@@ -1735,6 +1899,7 @@ sql:
     "cmd/server/main.go",
     "internal/config/config.go",
     "internal/database/database.go",
+    "internal/kernel/auth.go",
     "internal/kernel/kernel.go",
     "internal/modules/registry.go",
     "internal/server/server.go",
@@ -1754,6 +1919,19 @@ sql:
   const baseline = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   file(`apps/api/migrations/${baseline}_baseline.up.sql`, `-- Baseline: golang-migrate fails \`up\` on an empty migrations directory.\nSELECT 1;\n`);
   file(`apps/api/migrations/${baseline}_baseline.down.sql`, `SELECT 1;\n`);
+  file("scripts/sqlc.mjs", `#!/usr/bin/env node
+// sqlc wrapper. sqlc refuses a config with no sql: block ("no packages") — the normal state
+// of a project until a module with queries is installed — so skip instead of failing.
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+if (!/^\\s*- engine:/m.test(readFileSync("apps/api/sqlc.yaml", "utf8"))) {
+  console.log("sqlc: no module has queries yet — nothing to generate.");
+  process.exit(0);
+}
+const r = spawnSync("sqlc", ["generate"], { cwd: "apps/api", stdio: "inherit", shell: true });
+process.exit(r.status ?? 1);
+`);
   file("scripts/migrate.mjs", `#!/usr/bin/env node
 // golang-migrate wrapper that works the same in PowerShell, cmd, and sh.
 // npm runs scripts through cmd.exe on Windows, which does not expand $VAR — so the DB

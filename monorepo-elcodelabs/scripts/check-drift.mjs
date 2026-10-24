@@ -200,7 +200,8 @@ try {
   const missingRef = markers.filter((m) => !ref.includes(m.replace("// ", "")));
   const sqlc = readGenerated("go", "apps/api/sqlc.yaml");
   if (!sqlc.includes("# elco:sqlc:begin") || !sqlc.includes("# elco:sqlc:end")) missingGen.push("sqlc.yaml elco:sqlc markers");
-  if (!gen.includes("func Register(mux *http.ServeMux, d *kernel.Deps)")) missingGen.push("Register signature");
+  if (!gen.includes("func Register(mux *http.ServeMux, d *kernel.Deps) error")) missingGen.push("Register signature");
+  if (!ref.includes("func Register(mux *http.ServeMux, d *kernel.Deps) error")) missingRef.push("Register signature");
   if (!missingGen.length && !missingRef.length) ok("registry.go + sqlc.yaml markers == backend-go.md");
   else bad("Go registry markers drifted", `missing in generated: ${missingGen.join(", ") || "(none)"}\nmissing in backend-go.md: ${missingRef.join(", ") || "(none)"}`);
 } catch (err) { bad("Go registry markers", err.message); }
@@ -266,6 +267,7 @@ const FACT_OWNERS = {
   // Modules: the rule owns the registry/marker discipline; CLAUDE.md restates the invariant.
   "elco:": ["CLAUDE.md", ".claude/rules/modules.md"],
   "semantic": [".claude/rules/frontend-react.md", "CLAUDE.md"],
+  "modules.lock.json": [".claude/rules/modules.md"],
 };
 for (const backend of ["go", "nestjs", "express"]) {
   try {

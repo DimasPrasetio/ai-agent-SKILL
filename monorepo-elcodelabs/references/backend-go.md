@@ -44,7 +44,7 @@ Rules:
     "migrate:up": "node scripts/migrate.mjs up",
     "migrate:down": "node scripts/migrate.mjs down 1",
     "migrate:create": "cd apps/api && migrate create -ext sql -dir migrations",
-    "sqlc:generate": "cd apps/api && sqlc generate"
+    "sqlc:generate": "node scripts/sqlc.mjs"
   }
 }
 ```
@@ -142,8 +142,14 @@ there for the full code.
 `internal/config`, `database`, `kernel`, `server`, and `shared/` are the **kernel**: the stable
 surface every module — hand-written or from the module library — is built against.
 
-- **`kernel.Deps`** (`Config`, `DB`, `Log`) is what a module's `New` receives. A module keeps
-  what it needs and never reaches for globals.
+- **`kernel.Deps`** (`Config`, `DB`, `Log`, `Auth`) is what a module's `New` receives. A module
+  keeps what it needs and never reaches for globals.
+- **`Deps.Auth`** is the one kernel-level port: authentication. A module guards a handler with
+  `d.Auth.Require(h)` and reads the signed-in user with `d.Auth.UserID(r.Context())`; the
+  composition root fills the slot with `d.Auth.Provide(...)` from whichever module does auth.
+  It lives in the kernel rather than in each module's `ports/` because nearly every module needs
+  it — and `users` (guarded by auth) is also what `auth` needs, so per-module ports would make
+  the two depend on each other. Until a provider is set, guarded routes answer 401.
 - **`kernel.Version`** is the contract version. A library module states the version it needs
   (`requires_kernel` in its `module.yaml`). Bump it only for a change that would break an
   existing module; adding something is not one.
@@ -178,8 +184,9 @@ A module's package root (`internal/modules/<name>/<name>.module.go`) exposes:
 
 ```go
 // New builds the module from kernel.Deps plus one argument per port it needs — all of
-// them types from its OWN ports package.
-func New(d *kernel.Deps, users ports.UserStore) *Module
+// them types from its OWN ports package. An error (e.g. a required setting is missing, read
+// with config.Require) stops the API at startup.
+func New(d *kernel.Deps, users ports.UserStore) (*Module, error)
 
 // Routes mounts the module's HTTP handlers.
 func (m *Module) Routes(mux *http.ServeMux)
@@ -209,13 +216,21 @@ func (a authUserStore) FindByEmail(ctx context.Context, email string) (authports
 
 ```go
 // internal/modules/registry.go
-func Register(mux *http.ServeMux, d *kernel.Deps) {
+func Register(mux *http.ServeMux, d *kernel.Deps) error {
 	// elco:modules:begin
-	usersModule := users.New(d)
+	usersModule, err := users.New(d)
+	if err != nil {
+		return err
+	}
 	usersModule.Routes(mux)
-	authModule := auth.New(d, authUserStore{users: usersModule.Client()})
+	authModule, err := auth.New(d, authUserStore{users: usersModule.Client()})
+	if err != nil {
+		return err
+	}
 	authModule.Routes(mux)
+	d.Auth.Provide(authModule.Authenticator())
 	// elco:modules:end
+	return nil
 }
 ```
 
@@ -247,5 +262,5 @@ func Register(mux *http.ServeMux, d *kernel.Deps) {
           out: "internal/modules/order/infrastructure/sqlc"
   ```
 
-  sqlc refuses a config with no block at all ("no packages"), so `npm run sqlc:generate` only
-  works once the first module is in.
+  sqlc refuses a config with no block at all ("no packages"), so `npm run sqlc:generate` runs
+  through `scripts/sqlc.mjs`, which skips with a message until a module with queries is in.
