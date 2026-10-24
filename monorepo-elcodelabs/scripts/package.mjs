@@ -3,10 +3,12 @@
 // from SKILL.md / references/ / scripts/. Zero npm dependencies: it shells out to the zip
 // tool the platform already has (matches the extraction fallback chain in install.sh).
 //
-// Usage: node scripts/package.mjs
+// Usage: node scripts/package.mjs           rebuild the package
+//        node scripts/package.mjs --check   fail if the committed package differs from the sources
 
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, existsSync, readdirSync, statSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const SKILL_NAME = "monorepo-elcodelabs";
 const OUT = join(REPO_ROOT, "dist", `${SKILL_NAME}.skill`);
+const CHECK = process.argv.includes("--check");
 
 // This is the entire contract: only these are installed by install.ps1/install.sh.
 // evals/, dist/, install.*, Plan.md, .gitignore, .git/ must never appear in the package.
@@ -38,6 +41,48 @@ try {
   const stray = staged.filter((name) => FORBIDDEN.includes(name));
   if (stray.length) throw new Error(`staged package contains forbidden entries: ${stray.join(", ")}`);
 
+  if (CHECK) {
+    checkPackage();
+  } else {
+    build();
+  }
+} finally {
+  rmSync(stageParent, { recursive: true, force: true });
+}
+
+/** Compares every file in the committed package with the staged sources (zip timestamps aside). */
+function checkPackage() {
+  if (!existsSync(OUT)) {
+    console.error(`✗ ${OUT} is missing — run node scripts/package.mjs`);
+    process.exitCode = 1;
+    return;
+  }
+  const py = `
+import zipfile, hashlib, json, sys
+with zipfile.ZipFile(sys.argv[1]) as z:
+    print(json.dumps({n: hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if not n.endswith("/")}))
+`;
+  const r = spawnSync("python3", ["-c", py, OUT], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`reading the package needs python3: ${r.stderr}`);
+  const ignored = (p) => p.split("/").at(-1) === ".DS_Store";
+  const packed = Object.fromEntries(Object.entries(JSON.parse(r.stdout)).filter(([p]) => !ignored(p)));
+  const staged = {};
+  for (const e of readdirSync(stageParent, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const full = join(e.parentPath ?? e.path, e.name);
+    const rel = full.slice(stageParent.length + 1).split("\\").join("/");
+    if (!ignored(rel)) staged[rel] = createHash("sha256").update(readFileSync(full)).digest("hex");
+  }
+  const diff = [...new Set([...Object.keys(packed), ...Object.keys(staged)])]
+    .filter((p) => packed[p] !== staged[p])
+    .map((p) => `${!packed[p] ? "not packaged" : !staged[p] ? "removed from sources" : "changed"}: ${p}`);
+  if (diff.length) {
+    console.error(`✗ dist/${SKILL_NAME}.skill is stale — run node scripts/package.mjs\n  ${diff.join("\n  ")}`);
+    process.exitCode = 1;
+  } else console.log(`✓ dist/${SKILL_NAME}.skill matches the sources (${Object.keys(staged).length} files)`);
+}
+
+function build() {
   mkdirSync(dirname(OUT), { recursive: true });
   if (existsSync(OUT)) rmSync(OUT);
 
@@ -84,6 +129,4 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
 
   const size = statSync(OUT).size;
   console.log(`✓ Built ${OUT} (${size} bytes, ${entries.length || "?"} entries)`);
-} finally {
-  rmSync(stageParent, { recursive: true, force: true });
 }

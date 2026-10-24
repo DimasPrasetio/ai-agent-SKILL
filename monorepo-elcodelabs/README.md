@@ -83,6 +83,7 @@ node scripts/scaffold.mjs --help
 monorepo-elcodelabs/
 ├── SKILL.md                       # lean skill body: structure, rules, stack selection, pointers
 ├── README.md                      # this file
+├── AGENTS.md                      # rules for changing the skill (CLAUDE.md imports it)
 ├── references/                    # detailed, stack-specific rules (loaded on demand)
 │   ├── knowledge-gateway.md
 │   ├── backend-modular-monolith.md
@@ -94,7 +95,11 @@ monorepo-elcodelabs/
 │   ├── api-standard.md
 │   └── docker-deployment.md       # deploy standard for the elcodelabs VPS
 ├── scripts/
-│   └── scaffold.mjs               # zero-dependency Node scaffolder
+│   ├── scaffold.mjs               # zero-dependency Node scaffolder
+│   ├── check-drift.mjs            # references ↔ scaffolder ↔ module contract
+│   ├── module-contract.json       # fingerprints of the files library modules build on
+│   ├── smoke-test.mjs
+│   └── package.mjs
 ├── evals/                         # dev/QA test cases (NOT shipped in the .skill)
 ├── dist/
 │   └── monorepo-elcodelabs.skill    # prebuilt install package
@@ -103,7 +108,7 @@ monorepo-elcodelabs/
 └── .gitignore
 ```
 
-`evals/`, `dist/`, `install.*`, and `.gitignore` are repo/distribution tooling — they are **not**
+`evals/`, `dist/`, `install.*`, `AGENTS.md`, `CLAUDE.md`, and `.gitignore` are repo/distribution tooling — they are **not**
 part of the installed skill. The `.skill` package contains only `SKILL.md`, `README.md`,
 `references/`, and `scripts/`.
 
@@ -124,3 +129,8 @@ install`s them, type-checks, and boots `dev:api`/`dev:web` for real — Gerbang 
 archive contains only the payload — no `evals/`, `dist/`, `install.*`, or `Plan.md`). No change
 to `SKILL.md`, `references/`, or `scaffold.mjs` is done until `npm run verify` is green. Then
 re-run the installer on each device.
+
+`check-drift.mjs` also guards the **module contract** — the generated files the module library
+builds on — and the kernel version; [AGENTS.md](AGENTS.md) says what to do when it fails. The
+repository's pre-commit hook (`git config core.hooksPath .githooks`, once per clone) runs
+`check-drift.mjs` and `package.mjs --check`; CI runs those and the smoke test.

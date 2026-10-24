@@ -126,7 +126,9 @@ node $LIB/scripts/module.mjs promote invoice --migration <file>...
 ```
 
 It copies the module (generated sqlc code excluded), reads contracts, ports, tables, env, routes,
-and registry lines from the code into a draft `module.json`, and refuses a module that imports
-another (turn that into a port first). Then: finish `module.json` and `README.md`, remove
-anything specific to the project, add a testbed scenario in the library, run
-`node scripts/catalog.mjs`, and commit there.
+and registry lines from the code into a draft `module.json` (its `ui` kits from what it
+imports), and refuses — leaving the library untouched — a module that imports another (turn
+that into a port first) or breaks any other rule in the library's `AGENTS.md`. Then: finish
+`module.json` and `README.md`, remove anything specific to the project, add a testbed scenario
+in the library, run `node scripts/catalog.mjs`, and commit there; the library's pre-commit hook
+and CI run the same rules.

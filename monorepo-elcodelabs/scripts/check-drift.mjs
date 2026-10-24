@@ -10,10 +10,11 @@
 // rule actually leaks: a sentence gets helpfully repeated into a second file, both copies
 // then look authoritative, and months later they disagree with nothing to flag it.
 //
-// Usage: node scripts/check-drift.mjs
+// Usage: node scripts/check-drift.mjs [--accept-contract]
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -392,6 +393,92 @@ for (const backend of ["go", "nestjs", "express"]) {
 // Same Windows caveat as smoke-test.mjs: a file read moments ago can still be held by the
 // indexer or an editor. A scratch dir we failed to delete must not turn a green run red —
 // .smoke-tmp/ is gitignored and the next run reuses it.
+// ---------------------------------------------------------------------------
+// 12-13. The module contract. The module library (elcodelabs-modules) installs code that builds
+// on these generated files; changing one silently breaks every installed module. So the kernel
+// version is stated once per place and must agree, and the contract files are fingerprinted in
+// scripts/module-contract.json: a change to one fails here until it is accepted on purpose —
+// as compatible (same kernel version), or as a new kernel version.
+// ---------------------------------------------------------------------------
+
+const CONTRACT_FILE = join(REPO_ROOT, "scripts", "module-contract.json");
+const CONTRACT_FILES = [
+  "apps/api/internal/kernel/kernel.go",
+  "apps/api/internal/kernel/auth.go",
+  "apps/api/internal/kernel/authz.go",
+  "apps/api/internal/config/config.go",
+  "apps/api/internal/shared/apperror/apperror.go",
+  "apps/api/internal/shared/pagination/pagination.go",
+  "apps/api/internal/shared/request/request.go",
+  "apps/api/internal/shared/response/response.go",
+  "apps/api/internal/shared/validator/validator.go",
+  "apps/api/internal/modules/registry.go",
+  "apps/api/sqlc.yaml",
+  "apps/web/src/app/modules.ts",
+  "apps/web/src/shared/access.tsx",
+  "apps/web/src/shared/app-events.ts",
+  "apps/web/src/shared/composition.tsx",
+  "apps/web/src/shared/kernel.ts",
+  "apps/web/src/shared/lib/field-classes.ts",
+  "apps/web/src/shared/services/api-error.ts",
+  "apps/web/src/shared/services/http-client.ts",
+  "apps/web/src/shared/types/api.ts",
+  "apps/web/src/shared/types/frontend-module.ts",
+  "apps/web/src/shared/components/primitives/badge.tsx",
+  "apps/web/src/shared/components/primitives/button.tsx",
+  "apps/web/src/shared/components/primitives/card.tsx",
+  "apps/web/src/shared/components/primitives/dialog.tsx",
+  "apps/web/src/shared/components/primitives/input.tsx",
+  "apps/web/src/shared/components/primitives/label.tsx",
+  "apps/web/src/shared/components/primitives/skeleton.tsx",
+  "apps/web/src/shared/components/primitives/spinner.tsx",
+  "apps/web/src/theme/theme.css",
+];
+const ACCEPT = process.argv.includes("--accept-contract");
+
+// 12. One kernel version: kernel.go, the web's shared/kernel.ts, and the newest row of the
+// versions table in backend-go.md.
+let kernelVersion;
+try {
+  const goV = Number(readGenerated("go", "apps/api/internal/kernel/kernel.go").match(/const Version = (\d+)/)?.[1]);
+  const webV = Number(readGenerated("go", "apps/web/src/shared/kernel.ts").match(/KERNEL_VERSION = (\d+)/)?.[1]);
+  const table = readRef("backend-go.md").slice(readRef("backend-go.md").indexOf("### Kernel versions"));
+  const rows = [...table.matchAll(/^\| (\d+) \|/gm)].map((m) => Number(m[1]));
+  const docV = Math.max(...rows);
+  if (goV && goV === webV && goV === docV) {
+    kernelVersion = goV;
+    ok(`kernel version agrees: kernel.go == shared/kernel.ts == backend-go.md table (${goV})`);
+  } else bad("kernel version disagrees", `kernel.go: ${goV}, shared/kernel.ts: ${webV}, backend-go.md newest row: ${docV}`);
+} catch (err) { bad("kernel version", err.message); }
+
+// 13. The contract files match the fingerprint recorded for this kernel version.
+try {
+  const now = Object.fromEntries(CONTRACT_FILES.map((f) => [f, createHash("sha256").update(readGenerated("go", f)).digest("hex").slice(0, 16)]));
+  const saved = existsSync(CONTRACT_FILE) ? JSON.parse(readFileSync(CONTRACT_FILE, "utf8")) : { kernel: null, files: {} };
+  const changed = CONTRACT_FILES.filter((f) => saved.files[f] !== now[f]);
+  const gone = Object.keys(saved.files).filter((f) => !CONTRACT_FILES.includes(f));
+  if (ACCEPT) {
+    if (kernelVersion === undefined) bad("module contract", "fix the kernel version first");
+    else {
+      writeFileSync(CONTRACT_FILE, JSON.stringify({ kernel: kernelVersion, files: now }, null, 2) + "\n");
+      ok(`module contract accepted for kernel ${kernelVersion} (${changed.length + gone.length} file(s) changed) — commit scripts/module-contract.json`);
+    }
+  } else if (!changed.length && !gone.length && saved.kernel === kernelVersion) {
+    ok(`module contract unchanged for kernel ${kernelVersion} (${CONTRACT_FILES.length} files)`);
+  } else {
+    bad("module contract changed", [
+      saved.kernel !== kernelVersion ? `kernel version ${saved.kernel} → ${kernelVersion}` : null,
+      ...changed.map((f) => `changed: ${f}`),
+      ...gone.map((f) => `no longer tracked: ${f}`),
+      "",
+      "Library modules build on these files. Decide, then accept (see AGENTS.md › The module contract):",
+      "  - modules for this kernel still compile and behave the same → node scripts/check-drift.mjs --accept-contract",
+      "  - they do not → raise the kernel version (kernel.go, KERNEL_VERSION in scaffold.mjs, a row in",
+      "    backend-go.md › Kernel versions), update the library's modules, then --accept-contract",
+    ].filter((l) => l !== null).join("\n"));
+  }
+} catch (err) { bad("module contract", err.message); }
+
 for (const dir of Object.values(scaffolded)) {
   try {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

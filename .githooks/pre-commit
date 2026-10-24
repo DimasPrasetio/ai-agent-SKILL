@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuses a commit that leaves monorepo-elcodelabs out of step with itself or with the module
+# library's contract (rules: monorepo-elcodelabs/AGENTS.md). Other skills are not affected.
+# Enable once per clone: git config core.hooksPath .githooks
+git diff --cached --name-only | grep -q '^monorepo-elcodelabs/' || exit 0
+cd monorepo-elcodelabs || exit 1
+out=$(node scripts/check-drift.mjs 2>&1) || { echo "$out"; exit 1; }
+node scripts/package.mjs --check

@@ -22,3 +22,14 @@ bash ~/Documents/SKILL/monorepo-elcodelabs/install.sh     # ke ~/.claude/skills/
 ```
 
 Detail tiap skill ada di README di foldernya.
+
+## Mengubah skill
+
+Aktifkan hook pre-commit sekali setelah clone — hook ini menolak commit yang membuat
+`monorepo-elcodelabs` tidak selaras dengan referensinya, kontrak modulnya, atau paketnya:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Aturan mengubah `monorepo-elcodelabs` ada di [monorepo-elcodelabs/AGENTS.md](monorepo-elcodelabs/AGENTS.md).
