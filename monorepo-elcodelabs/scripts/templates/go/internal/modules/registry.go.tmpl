@@ -1,6 +1,7 @@
-// Package modules wires every backend module into the server — the one place a module is
-// registered. Each module is built and mounted in dependency order: a module that provides a
-// contract comes before the modules whose New takes it, so the compiler checks the wiring.
+// Package modules is the composition root — the only package that imports modules. Modules
+// never import each other: a consumer declares what it needs as ports in its own ports/
+// package, and an adapter beside this file (adapter_<consumer>_<port>.go) satisfies that port
+// with a provider's client. Build a provider before the modules wired to it.
 //
 // Tooling inserts lines between the elco:* markers. Keep the markers; add modules between
 // them, never around them.

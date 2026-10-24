@@ -26,7 +26,7 @@ working the same in PowerShell, cmd, and sh.
 Rules:
 
 - Use `golang-migrate` for migrations.
-- Use `sqlc` for type-safe DB access, generated **per module**: `sqlc.yaml` has one `sql:` block per module, reading from `internal/modules/<module>/infrastructure/queries` and writing to `internal/modules/<module>/infrastructure/sqlc`. A single project-wide `sqlc` package would let any module import any other module's generated queries, breaking the contracts-only boundary. **Every new module must add its own `sql:` block** — otherwise its queries never get generated.
+- Use `sqlc` for type-safe DB access, generated **per module**: `sqlc.yaml` has one `sql:` block per module, reading from `internal/modules/<module>/infrastructure/queries` and writing to `internal/modules/<module>/infrastructure/sqlc`. A single project-wide `sqlc` package would let any module import any other module's generated queries, breaking the module boundary. **Every new module must add its own `sql:` block** — otherwise its queries never get generated.
 - Use `database/sql` with the MySQL driver for the connection.
 - Do not use GORM by default. GORM may be used only when the user explicitly asks.
 - Do not use GORM AutoMigrate or ORM-based schema generation.
@@ -106,9 +106,11 @@ apps/api/
 │   │   ├── response/          # OK, Created, Paginated, Fail, Error — the envelope
 │   │   └── validator/         # field-by-field input errors
 │   └── modules/
-│       ├── registry.go        # the one place modules are wired (elco:* markers)
+│       ├── registry.go        # composition root: builds + mounts modules (elco:* markers)
+│       ├── adapter_order_productcatalog.go   # connects one port to a provider
 │       └── order/             # example module
 │           ├── contracts/
+│           ├── ports/
 │           ├── application/
 │           ├── domain/
 │           │   └── events/
@@ -167,36 +169,63 @@ surface every module — hand-written or from the module library — is built ag
 
 ## Module contract and the registry
 
+A module never imports another module (rule and rationale:
+[backend-modular-monolith.md](backend-modular-monolith.md#ports-contracts-and-the-composition-root)).
+It depends only on the kernel and its own packages. What it needs from outside is a port in its
+own `ports/`; what it offers is its `contracts/`.
+
 A module's package root (`internal/modules/<name>/<name>.module.go`) exposes:
 
 ```go
-// New builds the module. It takes kernel.Deps plus the contracts of the modules it calls.
-func New(d *kernel.Deps, users userscontracts.UserClient) *Module
+// New builds the module from kernel.Deps plus one argument per port it needs — all of
+// them types from its OWN ports package.
+func New(d *kernel.Deps, users ports.UserStore) *Module
 
 // Routes mounts the module's HTTP handlers.
 func (m *Module) Routes(mux *http.ServeMux)
 
-// Client returns the module's public contract — only for a module other modules call.
-func (m *Module) Client() contracts.OrderClient
+// Client returns the module's public contract — only for a module that offers one.
+func (m *Module) Client() contracts.UserClient
 ```
 
-`internal/modules/registry.go` is the one place modules are wired. Each module is built and
-mounted in dependency order — a provider before every module whose `New` takes its contract —
-so the compiler checks the wiring:
+`internal/modules/` (package `modules`) is the **composition root**, the only package that
+imports modules. `registry.go` builds each module and mounts its routes; a module that offers
+a contract comes before the modules wired to it. Each connection gets a small adapter in its
+own file beside the registry, named `adapter_<consumer>_<port>.go`:
 
 ```go
+// internal/modules/adapter_auth_userstore.go
+// authUserStore satisfies auth's UserStore port with the users module's client.
+type authUserStore struct{ users userscontracts.UserClient }
+
+func (a authUserStore) FindByEmail(ctx context.Context, email string) (authports.User, error) {
+	u, err := a.users.GetByEmail(ctx, email)
+	if err != nil {
+		return authports.User{}, err
+	}
+	return authports.User{ID: u.ID, Email: u.Email, PasswordHash: u.PasswordHash}, nil
+}
+```
+
+```go
+// internal/modules/registry.go
 func Register(mux *http.ServeMux, d *kernel.Deps) {
 	// elco:modules:begin
 	usersModule := users.New(d)
 	usersModule.Routes(mux)
-	authModule := auth.New(d, usersModule.Client())
+	authModule := auth.New(d, authUserStore{users: usersModule.Client()})
 	authModule.Routes(mux)
 	// elco:modules:end
 }
 ```
 
-The module's import goes between `// elco:imports:begin` and `// elco:imports:end`. Keep every
-`elco:*` marker: the module library's installer inserts lines between them.
+- An adapter only maps fields and forwards the call — no business logic. Logic belongs in a
+  module.
+- A port can be satisfied by anything: another module's client through an adapter, or code the
+  project writes itself (e.g. its own user table) — the consumer never knows which.
+- Imports go between `// elco:imports:begin` and `// elco:imports:end`. Keep every `elco:*`
+  marker: the module library's installer inserts lines between them, and generates the
+  adapter when the provider is a library module it knows.
 
 ## Migrations and sqlc per module
 

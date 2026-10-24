@@ -1,6 +1,6 @@
 ---
 name: monorepo-elcodelabs
-description: Use this skill whenever the user asks to create, scaffold, bootstrap, plan, audit, or restructure a monorepo, or to prepare or audit its deploy to the elcodelabs VPS. Enforces Dimas' locked standard — apps/web (React 19 + Tailwind 4), apps/api modular monolith (Go / NestJS / Express i.e. plain Node.js) with contracts-only module boundaries, a Claude Code knowledge gateway, /api/v1 conventions, and elcodelabs deployment (one image built in CI → GHCR and only pulled by the server, host-level shared MySQL with one DB + user per app, unique 127.0.0.1 port behind host nginx + certbot). Before any frontend UI it researches on the internet how that kind of app (POS, ERP, booking, dashboard, landing page…) is ideally designed today and writes a design brief first. Trigger even when the user only says "buatkan project", "setup fullstack repo", "new backend + frontend project", or names a stack like "Go + React monorepo" without the word "monorepo".
+description: Use this skill whenever the user asks to create, scaffold, bootstrap, plan, audit, or restructure a monorepo, or to prepare or audit its deploy to the elcodelabs VPS. Enforces Dimas' locked standard — apps/web (React 19 + Tailwind 4), apps/api modular monolith (Go / NestJS / Express i.e. plain Node.js) with modules that never import each other (ports + contracts, wired in one composition root), a Claude Code knowledge gateway, /api/v1 conventions, and elcodelabs deployment (one image built in CI → GHCR and only pulled by the server, host-level shared MySQL with one DB + user per app, unique 127.0.0.1 port behind host nginx + certbot). Before any frontend UI it researches on the internet how that kind of app (POS, ERP, booking, dashboard, landing page…) is ideally designed today and writes a design brief first. Trigger even when the user only says "buatkan project", "setup fullstack repo", "new backend + frontend project", or names a stack like "Go + React monorepo" without the word "monorepo".
 ---
 
 # Dimas Monorepo Standard
@@ -133,7 +133,7 @@ Forbidden as the default dev workflow: `go run main.go`, `node server.js`, produ
 
 ## Backend & Frontend (summary)
 
-- **Backend** is always a Modular Monolith. Each module exposes only `contracts/` as its public boundary; cross-module service/repository/domain imports, cross-module DB joins, and cross-module foreign keys are forbidden. Full rules: [references/backend-modular-monolith.md](references/backend-modular-monolith.md). In Go, every module is built on the kernel (`kernel.Deps`, `shared/response`, `shared/apperror`, …) and wired only in `internal/modules/registry.go` — [references/backend-go.md](references/backend-go.md#the-kernel).
+- **Backend** is always a Modular Monolith. Modules never import each other — not even another module's `contracts/`. A module offers `contracts/` and declares what it needs as ports in its own `ports/`; only the composition root connects them, through small adapters. Cross-module DB joins and foreign keys are forbidden. Full rules: [references/backend-modular-monolith.md](references/backend-modular-monolith.md). In Go, every module is built on the kernel (`kernel.Deps`, `shared/response`, `shared/apperror`, …) and wired only in `internal/modules/registry.go` — [references/backend-go.md](references/backend-go.md#the-kernel).
 - **Frontend** is React 19 + Tailwind 4 on shadcn/ui (Radix) with react-router-dom (lazy routes registered per module in `app/routes/modules.ts`), Zustand, Zod, Axios, and the `@/*` alias. Every color, font, radius, and shadow comes from the token contract in `src/theme/theme.css` through semantic classes — token names are fixed, values belong to the project or a preset. Use the `frontend-design` skill as the UI authority — if it isn't installed, install it first from the source in [references/frontend.md](references/frontend.md) rather than skipping it. Full rules: [references/frontend.md](references/frontend.md). Before the first UI, research how this kind of app is ideally designed today and write the brief to `knowledge/DESIGN.md` — [references/design-research.md](references/design-research.md).
 
 ## Deployment (summary)
@@ -170,8 +170,8 @@ Before delivering the structure or changing code, verify:
 
 - Includes `apps/web` and `apps/api`?
 - Includes `CLAUDE.md`, `knowledge/`, and `.claude/rules/`?
-- Backend follows Modular Monolith, with only `contracts/` public per module?
-- No cross-module service/repository imports, FKs, or joins?
+- Backend follows Modular Monolith: no module imports another (not even `contracts/`), needs declared in `ports/`, connections only in the composition root?
+- No cross-module FKs or joins? Adapters in the composition root free of business logic?
 - Backend watcher fixed by stack? Migration tool fixed for Go/NestJS (asked for Express)?
 - For Go: golang-migrate, sqlc, `database/sql` — not GORM?
 - Frontend uses React 19, Tailwind 4, shadcn/ui (`components.json`, `cn` package), react-router-dom, lazy routes, Zustand, Zod, Axios, `@/*`?

@@ -144,6 +144,10 @@ Rules:
 - Do not move a component to shared just because it is used more than once *inside the same module*.
 - Move to shared only when it is truly domain-agnostic and reusable *across* modules.
 - Shared UI must not know domain statuses like `ORDER_PAID`, `STOCK_LOW`, or `PAYMENT_FAILED`.
+- A frontend module never imports another module — the same rule as the backend
+  ([backend-modular-monolith.md](backend-modular-monolith.md#core-rule)). What modules share
+  goes through `shared/` (`http-client` hooks, shared stores, types); composing modules on one
+  screen happens in `app/`. This is what lets a module be installed from the library on its own.
 
 ## Routing and lazy loading
 

@@ -6,7 +6,16 @@ The reason for the modular monolith is to get clean module boundaries (so the co
 
 ## Core rule
 
-Each module is a boundary. A module must not directly access another module's service, repository, database model, or domain internals. Inter-module communication happens **only** through explicit module clients / interfaces / contracts.
+Each module is a boundary, and **a module never imports another module — not its internals,
+not even its `contracts/`**. A module states what it needs as **ports** in its own `ports/`
+folder and what it offers as **contracts** in its own `contracts/` folder. The two are
+connected only in the **composition root** — the one place the app is assembled — by a small
+adapter.
+
+Why: a module that imports no other module can be installed, tested, upgraded, and replaced on
+its own. That is what lets a module live in a shared library and be reused across projects: an
+`auth` module works with the library's `users` module or with a project's own user table,
+because it only depends on the port it declared.
 
 ## Strict module structure
 
@@ -14,7 +23,8 @@ Each backend module uses this structure:
 
 ```txt
 modules/order/
-├── contracts/          # public contract/client/interface other modules may depend on
+├── contracts/          # what this module OFFERS: its client interface + the types it returns
+├── ports/              # what this module NEEDS from outside: interfaces + types, owned here
 ├── application/        # use cases, application services, internal orchestration
 ├── domain/             # entities, value objects, domain rules
 │   └── events/         # domain events (must exist as a concept; not every module emits events)
@@ -24,38 +34,50 @@ modules/order/
 ```
 
 `events/` must exist as an architectural concept. Not every module needs to define events.
+`ports/` exists only when the module needs something from outside itself.
 
-## Public module boundary
+## Ports, contracts, and the composition root
 
-Only `contracts/` is public to other modules.
+- **`contracts/` is owned by the provider.** It is the module's public surface: a client
+  interface (`ProductClient`) and the plain types it returns. It never exposes domain
+  entities, repositories, or services.
+- **`ports/` is owned by the consumer.** It describes exactly what this module needs, in this
+  module's own words and types — `order/ports.ProductCatalog` with only the two methods order
+  calls, not all of `ProductClient`.
+- **Only the composition root sees both.** It builds the provider, wraps the provider's client
+  in an adapter that satisfies the consumer's port, and passes it to the consumer. Adapters are
+  small (field mapping and a call), live in the composition root, never inside a module, and
+  hold no business logic.
+
+| Stack | Composition root |
+|---|---|
+| Go | `internal/modules/registry.go` (+ adapters beside it) — see [backend-go.md](backend-go.md#module-contract-and-the-registry) |
+| NestJS | the root `AppModule`: bind each port token with `useFactory` over the provider's client |
+| Express | the app bootstrap that builds the modules and mounts their routers |
 
 Correct:
 
 ```txt
-OrderModule -> ProductModule/contracts/ProductClient
-OrderModule -> CustomerModule/contracts/CustomerClient
-OrderModule -> PaymentModule/contracts/PaymentClient
+OrderModule  -> order/ports/ProductCatalog            (its own port)
+composition root: productCatalogAdapter(ProductModule.Client()) satisfies order/ports/ProductCatalog
 ```
 
 Forbidden:
 
 ```txt
+OrderModule -> ProductModule/contracts/ProductClient   (imports another module)
 OrderModule -> ProductModule/application/ProductService
 OrderModule -> ProductModule/infrastructure/ProductRepository
 OrderModule -> ProductModule/domain/ProductEntity
 ```
 
-Contracts are owned by the **provider** (capability) module, not defined inside the consumer:
-
-```txt
-product/contracts/ProductClient
-customer/contracts/CustomerClient
-payment/contracts/PaymentClient
-```
+A port names what the consumer needs, not who provides it: `ports.UserStore`, not
+`ports.UsersModule`. Keep ports narrow — only the methods the module actually calls.
 
 ## Core modules
 
-`auth` and `users` are normal modules but considered core. Other modules must not query users/auth tables directly.
+`auth` and `users` are normal modules but considered core. Other modules must not query
+users/auth tables directly; they declare a port for what they need about a user.
 
 ```txt
 modules/
@@ -66,7 +88,7 @@ modules/
 └── ...
 ```
 
-Correct: `OrderModule -> UserClient.getUserById()`
+Correct: `OrderModule -> order/ports.UserDirectory.GetUser(id)`, wired to the users module's client
 Forbidden: `OrderRepository JOIN users`
 
 ## Backend shared folder
@@ -100,17 +122,17 @@ orders.customer_id   # primitive ID, OK
 orders.product_id    # primitive ID, OK
 ```
 
-Do not create DB-level foreign keys to `customers` or `products` across module boundaries. Use module clients for validation/lookup instead:
+Do not create DB-level foreign keys to `customers` or `products` across module boundaries. Validate and look up through the module's own ports instead:
 
 ```txt
-CustomerClient.getById(customerId)
-ProductClient.getById(productId)
+order/ports.CustomerDirectory.Exists(customerId)
+order/ports.ProductCatalog.GetPrice(productId)
 ```
 
 ## Transaction and orchestration
 
 - DB transactions are scoped inside a single module.
-- Cross-module flows are handled by an application service / orchestrator through module clients.
+- Cross-module flows are handled by an application service / orchestrator through the module's ports.
 - Strong consistency uses explicit orchestration.
 - Side effects may use an event/outbox pattern when the project genuinely needs it.
 
@@ -118,10 +140,10 @@ Example flow:
 
 ```txt
 OrderApplicationService
-  -> ProductClient.checkStock()
-  -> OrderRepository.create()
-  -> ProductClient.decreaseStock()
-  -> PaymentClient.createPayment()
+  -> ports.ProductCatalog.CheckStock()
+  -> OrderRepository.Create()
+  -> ports.ProductCatalog.DecreaseStock()
+  -> ports.Payments.CreatePayment()
 ```
 
 Never call another module's repository directly.

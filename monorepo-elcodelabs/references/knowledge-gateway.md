@@ -77,7 +77,7 @@ It must include:
 
 - Project identity and purpose.
 - Required commands (`npm run dev:web`, `npm run dev:api`, build, migrate).
-- Critical architecture rules (modular monolith, contracts-only boundary, host-level DB).
+- Critical architecture rules (modular monolith, modules never import each other, host-level DB).
 - Pointers to files in `knowledge/`, including `knowledge/SOURCE_PRIORITY.md`.
 - An instruction to read the relevant `knowledge/` file before changing code.
 

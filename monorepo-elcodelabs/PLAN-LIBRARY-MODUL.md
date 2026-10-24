@@ -21,6 +21,8 @@ tersedia. Target jangka panjang: ratusan modul.
 | K5 | **Konvensi shadcn/ui + Radix** jadi fondasi UI yang dikunci di skill | Komponen mini-erp-v2 memakai konvensi ini; tanpa nama token yang sama, komponen yang dipanen tidak jalan |
 | K6 | Gaya **"Bingkai Navy"** (mini-erp-v2, ADR-0017) jadi **preset di library**, bukan default skill | Skill tetap mewajibkan riset desain per jenis aplikasi; preset dipakai bila cocok (ERP/back-office) |
 | K7 | Urutan kerja: Fase 1 fondasi skill → Fase 2 repo library → Fase 3 installer → Fase 4 panduan di skill | Modul harus ditulis di atas pola scaffold yang sudah pasti |
+| K8 | **Modul tidak saling meng-import** (ports & adapters, diputuskan 24 Oktober 2026): kebutuhan dinyatakan di `ports/` milik consumer, penawaran di `contracts/` milik provider, disambung hanya di composition root (`internal/modules/` di Go) lewat adapter kecil | Setiap modul bisa dipasang, diuji, di-upgrade, dan diganti sendiri; provider bisa modul library atau kode project sendiri. Mengubah aturan lama "hanya `contracts/` yang publik" |
+| K9 | Dari mini-erp-v2 **hanya desainnya** yang diambil (nilai token, font, kepadatan, tampilan komponen), bukan sistem dan mekanismenya | Mekanisme dibangun baru di atas kernel dan standar skill ini |
 
 ## Tiga lapis desain
 
@@ -28,7 +30,7 @@ tersedia. Target jangka panjang: ratusan modul.
 |---|---|---|
 | Konvensi | nama token shadcn, `cn()`, `components.json`, struktur folder komponen | **Skill** (Fase 1) |
 | Gaya | nilai token navy OKLCH, font, bingkai sidebar, kepadatan tabel | **Library** `themes/bingkai-navy/` (Fase 2) |
-| Komponen | primitives, ui, patterns, AppShell | **Library**, dipanen dari mini-erp-v2 (Fase 2) |
+| Komponen | ui, patterns, layout aplikasi | **Library**, ditulis ulang dengan tampilan Bingkai Navy — tanpa mekanisme mini-erp-v2 (Fase 2) |
 
 ---
 
@@ -189,15 +191,23 @@ Bukti gerbang:
 **Fase 2 — Repo `elcodelabs-modules`**
 - Struktur: `modules/<id>/{module.yaml, README.md, api/, migrations/, web/, tests/}`,
   `themes/`, `testbed/`, `CATALOG.md` + `catalog.json` (dibuat CI).
-- Format `module.yaml`: `id`, `version`, `kind`, `stacks`, `requires_kernel`, `provides`,
-  `requires`, `owns_tables`, `env`, `routes`, `when_to_use`, `when_not_to_use`.
-- Preset `themes/bingkai-navy/`: `theme.css` (nilai navy), font, `DESIGN.md` ringkas dari
-  ADR-0017 + `docs/plan/redesain-ui/PLAN.md` mini-erp-v2.
-- Panen komponen `ui`/`patterns`/`AppShell` dari mini-erp-v2 — buang logika domain ERP.
-- Modul pilot: `users` lalu `auth` (sengaja saling bergantung).
+- Format `module.yaml`: `id`, `version`, `kind`, `stacks`, `requires_kernel`, `provides`
+  (contract yang ditawarkan), `ports` (kebutuhan dari luar + apakah wajib atau opsional),
+  `owns_tables`, `env`, `routes`, `when_to_use`, `when_not_to_use`. Tidak ada daftar modul lain
+  yang wajib dipasang — sebuah port bisa dipenuhi modul mana pun atau kode project.
+- Preset `themes/bingkai-navy/`: nilai token navy untuk `theme.css`, font, dan `DESIGN.md`
+  ringkas — **hanya desain** dari mini-erp-v2.
+- Komponen `ui`/`patterns`/layout aplikasi: tampilannya mengikuti Bingkai Navy, tetapi kodenya
+  ditulis ulang di atas primitives shadcn dan kontrak token. Perilaku dan mekanisme mini-erp-v2
+  (saved views, draft storage, alur data, dsb.) tidak dibawa.
+- Modul pilot: `users` dan `auth`, **masing-masing berdiri sendiri**. `auth` menyatakan port
+  `UserStore`; `users` menawarkan `UserClient`. Testbed membuktikan tiga hal: `auth` jalan
+  dengan adapter ke `users`, `auth` jalan dengan implementasi `UserStore` buatan project, dan
+  setiap modul lolos tes sendirian.
 
 **Fase 3 — Installer `module.mjs`** (di repo library): `list`, `add` (ganti import path,
-nomori migrasi, tambah blok sqlc, daftarkan registry dan route, cek `requires`, tulis
+nomori migrasi, tambah blok sqlc, daftarkan registry dan route, buat adapter bila provider port-nya modul library yang dikenal
+(selain itu laporkan port yang belum terpenuhi), tulis
 `modules.lock.json`, perbarui `MODULE_MAP.md`), lalu `outdated`, `upgrade` (3-way merge),
 `detach`, `promote`.
 

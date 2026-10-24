@@ -333,9 +333,10 @@ These few invariants are restated here on purpose: this file is always loaded an
 \`.claude/rules/\` is not. \`.claude/rules/\` holds the authoritative, path-scoped version — if
 the two ever disagree, the rules file wins and the drift is a finding to report.
 
-- Backend is a **modular monolith**. A module exposes only \`contracts/\` to other modules.
-  No cross-module service/repository/domain imports, no cross-module DB joins or foreign keys.
-- Cross-module relations are stored as primitive IDs and resolved via module clients.
+- Backend is a **modular monolith**. A module never imports another module — not even its
+  \`contracts/\`. It declares what it needs as ports in its own \`ports/\`; modules are connected
+  only in the composition root. No cross-module DB joins or foreign keys.
+- Cross-module relations are stored as primitive IDs and resolved through the module's ports.
 - Frontend uses the \`@/*\` alias, lazy routes, Zustand, Zod, Axios. UI is built from shadcn/ui
   primitives and semantic theme tokens — never raw colors.
 - A module is wired in only through its registry, between the \`elco:*\` markers.
@@ -540,7 +541,8 @@ Accepted
 We want clean module boundaries without the operational cost of microservices.
 
 ## Decision
-Backend is a modular monolith with contracts-only module boundaries. The enforceable form of
+Backend is a modular monolith whose modules never import each other: each declares what it
+needs as ports and offers contracts, connected only in the composition root. The enforceable form of
 this decision — what exactly is forbidden — is authoritative in
 \`.claude/rules/backend-modular-monolith.md\`; this ADR records only why it was chosen.
 
@@ -608,19 +610,23 @@ file(".claude/rules/backend-modular-monolith.md", `# Rule: Backend modular monol
 
 Applies to: \`apps/api/**\`.
 
-- Each module is a boundary. Only \`contracts/\` is public to other modules.
-- Forbidden: importing another module's application/infrastructure/domain internals.
+- Each module is a boundary. It offers \`contracts/\` (owned by the provider) and declares what it
+  needs as ports in its own \`ports/\` (owned by the consumer).
+- Forbidden: importing another module at all — its internals and its \`contracts/\` alike. Only
+  the composition root imports modules, connecting a provider's client to a consumer's port
+  with a small adapter that holds no business logic.
 - Forbidden: cross-module DB joins and cross-module foreign keys.
-- Cross-module relations are primitive IDs; resolve via module clients.
+- Cross-module relations are primitive IDs; resolve them through the module's own ports.
 - Transactions are scoped inside a single module; orchestrate cross-module flows via app services.
 - \`shared/\` holds only technical utilities (errors, response, request, logger, validator, pagination, utils) — never domain logic.
 `);
 // Registries and markers are what the module library installs into (references/backend-go.md,
 // references/frontend.md). The backend registry exists for Go only, so far.
 const goModuleRules = backend === "go" ? [
-  "- Go: a module's package root exposes `New(d *kernel.Deps, <the contracts it needs>...)`,",
-  "  `Routes(mux *http.ServeMux)`, and `Client()` when it provides a contract. In `registry.go` a",
-  "  provider comes before every module whose `New` takes its contract.",
+  "- Go: a module's package root exposes `New(d *kernel.Deps, <one value per port it needs>...)`,",
+  "  `Routes(mux *http.ServeMux)`, and `Client()` when it offers a contract. `internal/modules` is",
+  "  the composition root: `registry.go` builds a provider before the modules wired to it, and",
+  "  each connection is an adapter in its own `adapter_<consumer>_<port>.go` beside it.",
   "- Go: a module owns its `sql:` block in `sqlc.yaml` and adds migrations with",
   "  `npm run migrate:create` (timestamp-versioned, so two branches never collide).",
   "- Go: `internal/kernel` and `internal/shared` are the kernel every module builds on. Change them",
@@ -637,6 +643,8 @@ file(".claude/rules/modules.md", [
     : "- A frontend module is wired in only through `apps/web/src/app/routes/modules.ts`. Never mount\n  its routes elsewhere.",
   "- Keep every `elco:*` marker. Tooling inserts lines between them — add yours between them too,",
   "  never around or instead of them.",
+  "- A frontend module never imports another module. Shared needs go through `shared/`; putting",
+  "  several modules on one screen happens in `app/`.",
   ...goModuleRules,
   "- Customize an installed module in new files of its own (e.g. `custom_*.go`, `Custom*.tsx`)",
   "  rather than editing the files it shipped with, so a later upgrade merges cleanly.",
@@ -1678,6 +1686,7 @@ keep(
 function scaffoldModuleKeep(base, mod) {
   keep(
     `${base}/${mod}/contracts`,
+    `${base}/${mod}/ports`,
     `${base}/${mod}/application`,
     `${base}/${mod}/domain/events`,
     `${base}/${mod}/infrastructure`,
@@ -1714,7 +1723,7 @@ time = true
 clean_on_exit = true
 `);
   // Every module adds its own sql: block between the markers (one generated package per
-  // module keeps the contracts-only boundary). sqlc refuses a config with no block at all
+  // module keeps its generated queries private to it). sqlc refuses a config with no block at all
   // ("no packages"), so `npm run sqlc:generate` only works once the first module is in.
   file("apps/api/sqlc.yaml", `version: "2"
 sql:
