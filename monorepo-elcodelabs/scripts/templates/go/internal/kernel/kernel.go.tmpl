@@ -1,7 +1,5 @@
 // Package kernel is the stable surface every backend module is built against: what a module
-// receives (Deps) and the shared/ packages it may import. Library modules state the kernel
-// version they need (requires_kernel in module.yaml). Bump Version only for a change that
-// would break an existing module — adding something new is not one.
+// receives (Deps) and the shared/ packages it may import.
 package kernel
 
 import (
@@ -11,8 +9,14 @@ import (
 	"__GO_MODULE__/internal/config"
 )
 
-// Version is the kernel contract version.
-const Version = 1
+// Version is the kernel contract version, frontend shared surface included
+// (apps/web/src/shared/kernel.ts states the same number). A library module states the
+// minimum it needs (requires_kernel).
+//
+//	1  Deps (Config, DB, Log, Auth), shared/, the module registry
+//	2  Deps.Authz: permissions declared by modules, an authorization provider slot;
+//	   web: useCan / AccessContext, FrontendModule.provider, NavItem.permission, app events
+const Version = 2
 
 // Deps is what a module's New receives. A module keeps what it needs from it and never
 // reaches for globals instead.
@@ -22,4 +26,6 @@ type Deps struct {
 	Log    *slog.Logger
 	// Auth guards handlers; the auth provider module fills it (see AuthSlot).
 	Auth *AuthSlot
+	// Authz guards handlers by permission; an authorization module fills it (see AuthzSlot).
+	Authz *AuthzSlot
 }

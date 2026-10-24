@@ -298,3 +298,24 @@ dan smoke test skill hijau untuk ketiga stack (termasuk `/readyz` 200 dengan MyS
 Belum: commit kedua repo; repo library ke GitHub (lalu variabel CI `SKILL_REPO`/`SKILL_PATH`);
 memasang ulang skill ke `~/.claude/skills`; `dev:api` lewat `air` belum teruji di mesin ini.
 
+### RBAC (24 Oktober 2026)
+
+- **Kernel v2 (skill)**: `d.Authz` (`kernel/authz.go`) — modul mendeklarasikan permission
+  `<modul>.<aksi>` dengan `d.Authz.Declare` dan menjaga rute dengan `d.Authz.Require`; tanpa
+  penyedia, aturannya "sudah login = boleh". Web: `useCan`/`AccessContext` (`shared/access.tsx`),
+  `shared/app-events.ts`, `FrontendModule.provider`, `NavItem.permission`, `shared/kernel.ts`.
+  `requires_kernel` kini versi minimum; tabel versi kernel dan cara naik versi di
+  `backend-go.md`.
+- **Perbaikan skill yang ditemukan**: `scripts/migrate.mjs` dulu memanggil `migrate` lewat shell
+  (DSN `tcp(...)` rusak) dan tanpa `multiStatements=true` (prod compose juga). Keduanya
+  diperbaiki; testbed kini memigrasi lewat golang-migrate sungguhan.
+- **Library**: modul baru `rbac` 0.1.0 (role, permission per modul, anggota; Administrator `*`
+  terlindungi; bootstrap admin; cache 30 detik yang dibersihkan setiap perubahan; port
+  `UserDirectory` ← users). `users` 0.2.0 (`users.read`/`users.manage`, `UserClient.Search` dan
+  `GetByEmail`), `auth` 0.2.0 (event `session:changed`), `app-shell` 0.2.0 (menu disaring
+  permission).
+- **Bukti**: testbed lima skenario hijau (`full` dengan pemeriksaan RBAC, `no-rbac` baru);
+  upgrade nyata 0.1.0 → 0.2.0 dari commit pertama library lalu tambah rbac, build + tes hijau;
+  tampilan Roles, detail role, dan UI Viewer dicek di browser; drift check dan smoke test skill
+  hijau.
+

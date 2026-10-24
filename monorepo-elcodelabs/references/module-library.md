@@ -67,6 +67,9 @@ node $LIB/scripts/module.mjs add ui-core app-shell users
 node $LIB/scripts/module.mjs add auth --port UserStore=users
 ```
 
+A module states the minimum kernel it needs (`requires_kernel`); a project on an older kernel
+moves up first ([backend-go.md](backend-go.md#kernel-versions)).
+
 `add` copies the module into the project, adds its migrations with fresh timestamp versions,
 writes its lines between the `elco:*` markers (Go registry, `sqlc.yaml`, `app/modules.ts`), its
 npm dependencies, its env names into `.env.example`, its row into `knowledge/MODULE_MAP.md`, and

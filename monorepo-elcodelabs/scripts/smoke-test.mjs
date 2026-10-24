@@ -204,11 +204,15 @@ import (
 )
 
 type Module struct {
-	q    *sqlc.Queries
-	auth kernel.Authenticator
+	q     *sqlc.Queries
+	auth  kernel.Authenticator
+	authz *kernel.AuthzSlot
 }
 
-func New(d *kernel.Deps) (*Module, error) { return &Module{q: sqlc.New(d.DB), auth: d.Auth}, nil }
+func New(d *kernel.Deps) (*Module, error) {
+	d.Authz.Declare(kernel.Permission{Name: "ping.admin", Module: "ping", Description: "Fixture permission"})
+	return &Module{q: sqlc.New(d.DB), auth: d.Auth, authz: d.Authz}, nil
+}
 
 func (m *Module) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +220,9 @@ func (m *Module) Routes(mux *http.ServeMux) {
 	})
 	mux.Handle("GET /api/v1/ping/secure", m.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		response.OK(w, "secret", nil)
+	})))
+	mux.Handle("GET /api/v1/ping/admin", m.authz.Require("ping.admin", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response.OK(w, "admin", nil)
 	})))
 }
 
@@ -294,6 +301,9 @@ async function checkGoBinary(dir, fixtureInstalled) {
       const secureBody = await secure.json().catch(() => null);
       if (secure.status === 401 && secureBody?.success === false) pass("api binary → d.Auth.Require without a provider → 401");
       else fail(`guarded fixture route answered ${secure.status} ${JSON.stringify(secureBody)}`);
+      const admin = await fetch(`http://localhost:${port}/api/v1/ping/admin`);
+      if (admin.status === 401) pass("api binary → d.Authz.Require without a session → 401");
+      else fail(`permission-guarded fixture route answered ${admin.status}`);
     }
     if (!process.env.SMOKE_DB_DSN) skip("go: /readyz → 200 — set SMOKE_DB_DSN to a reachable MySQL to check it");
   } catch (err) {

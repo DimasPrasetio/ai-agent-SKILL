@@ -1,0 +1,105 @@
+package kernel
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"sort"
+	"sync"
+
+	"__GO_MODULE__/internal/shared/response"
+)
+
+// Permission is one thing a module lets an admin grant, named "<module>.<action>"
+// (e.g. "users.manage"). Permissions come from code — modules declare them; who holds them
+// is data, kept by the authorization provider.
+type Permission struct {
+	Name        string `json:"name"`
+	Module      string `json:"module"`
+	Description string `json:"description"`
+}
+
+// Authorizer decides whether the signed-in user may do something.
+type Authorizer interface {
+	Can(ctx context.Context, permission string) bool
+}
+
+// AuthzSlot is the authorization every module receives in Deps.Authz. Like Auth, it is a
+// kernel port rather than a per-module one: nearly every module needs it.
+//
+// Without a provider the policy is "signed in = allowed", so a module works on its own; once
+// the composition root calls Provide (the rbac module), its decisions apply everywhere.
+type AuthzSlot struct {
+	auth  *AuthSlot
+	mu    sync.RWMutex
+	p     Authorizer
+	perms map[string]Permission
+}
+
+// NewAuthzSlot returns the slot; it identifies users through auth.
+func NewAuthzSlot(auth *AuthSlot) *AuthzSlot {
+	return &AuthzSlot{auth: auth, perms: map[string]Permission{}}
+}
+
+// Declare registers the permissions a module guards with. Call it in the module's New.
+func (s *AuthzSlot) Declare(perms ...Permission) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range perms {
+		s.perms[p.Name] = p
+	}
+}
+
+// Permissions returns every declared permission, sorted by name — the catalog an
+// authorization provider offers admins.
+func (s *AuthzSlot) Permissions() []Permission {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Permission, 0, len(s.perms))
+	for _, p := range s.perms {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Provide sets the authorization provider. Called once, from internal/modules/registry.go.
+func (s *AuthzSlot) Provide(p Authorizer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p = p
+}
+
+func (s *AuthzSlot) provider() Authorizer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.p
+}
+
+// Can reports whether the signed-in user holds permission.
+func (s *AuthzSlot) Can(ctx context.Context, permission string) bool {
+	if p := s.provider(); p != nil {
+		return p.Can(ctx, permission)
+	}
+	_, signedIn := s.auth.UserID(ctx)
+	return signedIn
+}
+
+// Require wraps h so it runs only for a signed-in user holding permission: 401 without a
+// session (through d.Auth), 403 without the permission. Using a permission nobody declared
+// is a programming error, caught when the routes are mounted.
+func (s *AuthzSlot) Require(permission string, h http.Handler) http.Handler {
+	s.mu.RLock()
+	_, declared := s.perms[permission]
+	s.mu.RUnlock()
+	if !declared {
+		panic(fmt.Sprintf("authz: route guarded by %q, which no module declared — call d.Authz.Declare in New", permission))
+	}
+	return s.auth.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.Can(r.Context(), permission) {
+			response.Fail(w, http.StatusForbidden, "You do not have permission to do this", nil)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+}

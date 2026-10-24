@@ -169,6 +169,19 @@ module; everything it contributes goes through this object:
 | `slots` | Content for named places in the layout (`"sidebar-footer"`, `"header-end"`). |
 | `guard` | An element wrapping every protected route (renders `<Outlet />` when allowed). One module at most — normally auth. |
 | `layout` | The frame around protected pages (renders `<Outlet />`). One module at most — normally the app shell. |
+| `provider` | A component wrapping the whole app, e.g. the authorization module's `AccessContext`. |
+
+### Permissions and app events
+
+- `useCan("users.manage")` (`@/shared/access`) says whether to show something that needs a
+  permission; `NavItem.permission` hides a nav entry the same way. Without an authorization
+  module it is always `true` (matching the backend's "signed in = allowed"). It only hides UI —
+  the API enforces every permission itself.
+- `@/shared/app-events` (`emitAppEvent` / `onAppEvent`) is how a module tells the others
+  something happened without importing them — e.g. auth emits `"session:changed"` and the
+  authorization module reloads the user's permissions. Add an event name only for something
+  every module may care about.
+- `shared/kernel.ts` states the kernel version (see [backend-go.md](backend-go.md#kernel-versions)).
 
 ```tsx
 // modules/dashboard/module.tsx
@@ -209,6 +222,8 @@ export const frontendModules: FrontendModule[] = [
   `App.tsx` provides them, and the layout reads them with `useNavItems()` / `useSlot()` from
   `@/shared/composition`. This is how an app shell shows a user menu from auth without either
   importing the other.
+- `provider` wraps the whole app (registry order, outermost first) — how an authorization module
+  supplies `AccessContext`.
 - A module's paths live in its own `module.tsx`; `app/routes/route-paths.ts` holds app-level
   paths only. Installing a module never edits a file outside the registry.
 - Keep the `elco:*` markers; add registrations between them.

@@ -142,14 +142,22 @@ there for the full code.
 `internal/config`, `database`, `kernel`, `server`, and `shared/` are the **kernel**: the stable
 surface every module — hand-written or from the module library — is built against.
 
-- **`kernel.Deps`** (`Config`, `DB`, `Log`, `Auth`) is what a module's `New` receives. A module
-  keeps what it needs and never reaches for globals.
+- **`kernel.Deps`** (`Config`, `DB`, `Log`, `Auth`, `Authz`) is what a module's `New` receives.
+  A module keeps what it needs and never reaches for globals.
 - **`Deps.Auth`** is the one kernel-level port: authentication. A module guards a handler with
   `d.Auth.Require(h)` and reads the signed-in user with `d.Auth.UserID(r.Context())`; the
   composition root fills the slot with `d.Auth.Provide(...)` from whichever module does auth.
   It lives in the kernel rather than in each module's `ports/` because nearly every module needs
   it — and `users` (guarded by auth) is also what `auth` needs, so per-module ports would make
   the two depend on each other. Until a provider is set, guarded routes answer 401.
+- **`Deps.Authz`** is authorization, the second kernel-level port. A module **declares** the
+  permissions it guards with in `New` — `d.Authz.Declare(kernel.Permission{Name: "users.manage",
+  Module: "users", Description: "…"})`, named `<module>.<action>` — and guards with
+  `d.Authz.Require("users.manage", h)` (401 without a session, 403 without the permission) or
+  checks `d.Authz.Can(ctx, …)`. Guarding with an undeclared permission panics at startup. Without
+  a provider the policy is "signed in = allowed", so a module works alone; an authorization
+  module (the library's `rbac`) fills the slot with `d.Authz.Provide(...)` and reads the catalog
+  from `d.Authz.Permissions()`. Permissions come from code; who holds them is data.
 - **`kernel.Version`** is the contract version. A library module states the version it needs
   (`requires_kernel` in its `module.yaml`). Bump it only for a change that would break an
   existing module; adding something is not one.
@@ -172,6 +180,21 @@ surface every module — hand-written or from the module library — is built ag
   `X-Request-ID` plus a logger carrying it (`logger.From(r.Context())`). Panics become a 500
   envelope. `SIGTERM` (`docker stop`) drains in-flight requests before exit.
 - `shared/apperror` is not named `errors` so it never shadows the standard library package.
+
+### Kernel versions
+
+`kernel.Version` (and `apps/web/src/shared/kernel.ts`) is the contract number a library module's
+`requires_kernel` is checked against — as a minimum. Bump it when the kernel gains something
+modules may rely on; record what in the comment above `Version`.
+
+| Version | Adds |
+|---|---|
+| 1 | `Deps` (`Config`, `DB`, `Log`, `Auth`), `shared/`, the module registries |
+| 2 | `Deps.Authz` (`authz.go`); web: `shared/access.tsx` (`useCan`), `shared/app-events.ts`, `FrontendModule.provider`, `NavItem.permission`, `shared/kernel.ts` |
+
+A project scaffolded on an older kernel moves up by copying the new kernel files from this
+skill's `scripts/templates/` (for 2: `internal/kernel/authz.go`, the `Authz` field in `Deps`,
+its construction in `main.go`, and the web files above), then raising both version numbers.
 
 ## Module contract and the registry
 
@@ -247,6 +270,11 @@ func Register(mux *http.ServeMux, d *kernel.Deps) error {
 - Migrations are **timestamp-versioned** (`npm run migrate:create -- <name>` →
   `<yyyymmddhhmmss>_<name>.up.sql`), so migrations added on two branches never collide. A
   module's migrations create only the tables it owns.
+- `npm run migrate:up|down` runs the golang-migrate CLI (same version as in the image):
+  `go install -tags mysql github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1`. The wrapper
+  and the prod compose add `multiStatements=true`, so one migration file may hold several
+  statements (a table and its seed rows). Keep `DB_DSN` free of `?params` — the app sets
+  `parseTime` in code.
 - The scaffold ships a no-op `<timestamp>_baseline` migration: golang-migrate fails `up` on an
   empty directory, which would break the first deploy.
 - Each module adds its own `sql:` block to `sqlc.yaml`, between `# elco:sqlc:begin` and

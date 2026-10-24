@@ -1,8 +1,9 @@
 // Package modules is the composition root — the only package that imports modules. Modules
 // never import each other: a consumer declares what it needs as ports in its own ports/
 // package, and an adapter beside this file (adapter_<consumer>_<port>.go) satisfies that port
-// with a provider's client. Build a provider before the modules wired to it. The module that
-// does authentication fills the kernel's slot here too: d.Auth.Provide(...).
+// with a provider's client. Build a provider before the modules wired to it. The modules that
+// do authentication and authorization fill the kernel's slots here too: d.Auth.Provide(...),
+// d.Authz.Provide(...).
 //
 // Tooling inserts lines between the elco:* markers. Keep the markers; add modules between
 // them, never around them.

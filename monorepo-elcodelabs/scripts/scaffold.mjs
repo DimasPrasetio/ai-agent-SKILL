@@ -629,6 +629,8 @@ const goModuleRules = backend === "go" ? [
   "  each connection is an adapter in its own `adapter_<consumer>_<port>.go` beside it.",
   "- Go: guard a handler with `d.Auth.Require(h)` and read the user with `d.Auth.UserID(ctx)`. The",
   "  auth module fills that slot in `registry.go` with `d.Auth.Provide(...)` — never import it.",
+  "- Go: a module declares its permissions (`<module>.<action>`) with `d.Authz.Declare` in `New` and",
+  "  guards with `d.Authz.Require(permission, h)`; never check roles or import an rbac module.",
   "- Go: a module owns its `sql:` block in `sqlc.yaml` and adds migrations with",
   "  `npm run migrate:create` (timestamp-versioned, so two branches never collide).",
   "- Go: `internal/kernel` and `internal/shared` are the kernel every module builds on. Change them",
@@ -646,7 +648,8 @@ file(".claude/rules/modules.md", [
   "- Keep every `elco:*` marker. Tooling inserts lines between them — add yours between them too,",
   "  never around or instead of them.",
   "- A frontend module never imports another module. Shared needs go through `shared/`; putting",
-  "  several modules on one screen happens in `app/`.",
+  "  several modules on one screen happens in `app/`. Hide what needs a permission with `useCan`",
+  "  or `NavItem.permission`; tell other modules something happened with `@/shared/app-events`.",
   ...goModuleRules,
   "- Customize an installed module in new files of its own (e.g. `custom_*.go`, `Custom*.tsx`)",
   "  rather than editing the files it shipped with, so a later upgrade merges cleanly.",
@@ -861,7 +864,7 @@ const migrateService = {
   migrate:
     image: ${image}:\${IMAGE_TAG:?IMAGE_TAG is not set — run ./deploy.sh <git-sha>}
     profiles: ["ops"]
-    entrypoint: ["migrate", "-path", "/app/migrations", "-database", "mysql://\${DB_DSN}"]
+    entrypoint: ["migrate", "-path", "/app/migrations", "-database", "mysql://\${DB_DSN}?multiStatements=true"]
     command: ["up"]
     env_file: .env
     extra_hosts:
@@ -1043,7 +1046,7 @@ exit 1
 `);
 
 const prodDbUrl = backend === "go"
-  ? `# Go DSN (no scheme). Used by the app AND by migrate (compose -> "mysql://\${DB_DSN}").
+  ? `# Go DSN (no scheme, no ?params). Used by the app AND by migrate (compose -> "mysql://\${DB_DSN}?multiStatements=true").
 DB_DSN=${slug}_user:<random-hex>@tcp(host.docker.internal:3306)/${dbName}`
   : `# Prisma URI${backend === "nestjs" ? " — used by the app AND by the migrate service" : ""}.
 DATABASE_URL=mysql://${slug}_user:<random-hex>@host.docker.internal:3306/${dbName}`;
@@ -1324,17 +1327,75 @@ createRoot(document.getElementById("root")!).render(
 
 file("apps/web/src/app/App.tsx", `import { AppProvider } from "@/app/providers/AppProvider";
 import { RouterProvider } from "@/app/providers/RouterProvider";
-import { composition } from "@/app/composition";
+import { composition, moduleProviders } from "@/app/composition";
 import { CompositionProvider } from "@/shared/composition";
 
 export default function App() {
+  const app = moduleProviders.reduceRight((child, Provider) => <Provider>{child}</Provider>, <RouterProvider />);
   return (
     <AppProvider>
-      <CompositionProvider value={composition}>
-        <RouterProvider />
-      </CompositionProvider>
+      <CompositionProvider value={composition}>{app}</CompositionProvider>
     </AppProvider>
   );
+}
+`);
+
+file("apps/web/src/shared/kernel.ts", `/**
+ * The frontend half of the kernel contract — the same number as kernel.Version in
+ * apps/api/internal/kernel (see the changelog there). Library modules state the minimum they
+ * need; the module installer reads it from here when a project has no Go API.
+ */
+export const KERNEL_VERSION = 2;
+`);
+
+file("apps/web/src/shared/access.tsx", `import { createContext, useContext } from "react";
+
+/** What the signed-in user may do. Permissions are "<module>.<action>", e.g. "users.manage". */
+export interface Access {
+  can: (permission: string) => boolean;
+  /** False while the provider is still loading the user's permissions. */
+  ready: boolean;
+}
+
+// Without an authorization module everything is allowed — the backend's default policy is
+// "signed in = allowed" too. An rbac module provides the real answer.
+const AccessContext = createContext<Access>({ can: () => true, ready: true });
+
+/** Provided by the module that does authorization. */
+export const AccessProvider = AccessContext.Provider;
+
+export function useAccess(): Access {
+  return useContext(AccessContext);
+}
+
+/** Whether to show what needs permission. The API enforces it either way. */
+export function useCan(permission: string): boolean {
+  return useAccess().can(permission);
+}
+`);
+
+file("apps/web/src/shared/app-events.ts", `/**
+ * App-wide events — how one module tells others something happened without importing them.
+ * Add a name here only for something every module may care about.
+ */
+export type AppEvent =
+  /** Someone signed in or out, or the session expired. */
+  | "session:changed";
+
+const listeners = new Map<AppEvent, Set<() => void>>();
+
+export function emitAppEvent(event: AppEvent): void {
+  listeners.get(event)?.forEach((fn) => fn());
+}
+
+/** Runs fn on every event; returns a function that stops it. */
+export function onAppEvent(event: AppEvent, fn: () => void): () => void {
+  const set = listeners.get(event) ?? new Set();
+  set.add(fn);
+  listeners.set(event, set);
+  return () => {
+    set.delete(fn);
+  };
 }
 `);
 
@@ -1368,7 +1429,7 @@ file("apps/web/src/app/routes/route-paths.ts", `export const ROUTE_PATHS = {
 } as const;
 `);
 
-file("apps/web/src/shared/types/frontend-module.ts", `import type { ReactNode } from "react";
+file("apps/web/src/shared/types/frontend-module.ts", `import type { ComponentType, ReactNode } from "react";
 import type { RouteObject } from "react-router-dom";
 import type { NavItem, SlotName } from "@/shared/composition";
 
@@ -1390,6 +1451,8 @@ export interface FrontendModule {
   guard?: ReactNode;
   /** The frame around protected pages; renders <Outlet />. At most one module. */
   layout?: ReactNode;
+  /** Wraps the whole app, e.g. to provide AccessContext. Providers nest in registry order. */
+  provider?: ComponentType<{ children: ReactNode }>;
 }
 `);
 
@@ -1405,6 +1468,8 @@ export interface NavItem {
   group?: string;
   /** Lower comes first within its group. */
   order?: number;
+  /** Shown only to users who hold it (see useCan). The backend still enforces it. */
+  permission?: string;
 }
 
 /** Named places in the layout that modules can fill. */
@@ -1457,6 +1522,9 @@ for (const m of frontendModules) {
     (slots[name as SlotName] ??= []).push(node);
   }
 }
+
+/** Providers modules contribute, outermost first. */
+export const moduleProviders = frontendModules.flatMap((m) => (m.provider ? [m.provider] : []));
 
 /** Navigation and slot content gathered from every registered module. */
 export const composition: Composition = {
@@ -1900,6 +1968,7 @@ sql:
     "internal/config/config.go",
     "internal/database/database.go",
     "internal/kernel/auth.go",
+    "internal/kernel/authz.go",
     "internal/kernel/kernel.go",
     "internal/modules/registry.go",
     "internal/server/server.go",
@@ -1952,11 +2021,14 @@ if (!dsn) {
   process.exit(1);
 }
 
-const r = spawnSync(
-  "migrate",
-  ["-path", "migrations", "-database", \`mysql://\${dsn}\`, ...process.argv.slice(2)],
-  { cwd: "apps/api", stdio: "inherit", shell: true }
-);
+// multiStatements: a migration file may hold several statements (a table and its seed rows).
+// No shell: the DSN's "tcp(host:port)" would be parsed as shell syntax.
+const url = \`mysql://\${dsn}\${dsn.includes("?") ? "&" : "?"}multiStatements=true\`;
+const r = spawnSync("migrate", ["-path", "migrations", "-database", url, ...process.argv.slice(2)], {
+  cwd: "apps/api",
+  stdio: "inherit",
+});
+if (r.error) console.error(\`migrate: \${r.error.message} — install golang-migrate (references/backend-go.md)\`);
 process.exit(r.status ?? 1);
 `);
 }
