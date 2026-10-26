@@ -364,6 +364,13 @@ async function testStack(stack) {
         const vet = run("go", ["vet", "./..."], { cwd: join(dir, "apps/api") });
         if (vet.status !== 0) fail(`go vet exited ${vet.status}\n${vet.stderr}`);
         else pass(`go vet ./...${fixtureInstalled ? " (with fixture module)" : ""}`);
+        // The kernel's tests; with SMOKE_DB_DSN also its MySQL ones (transactions, deadlock retry,
+        // tasks, events, schedules) in throwaway databases.
+        const env = process.env.SMOKE_DB_DSN ? { ...process.env, KERNEL_TEST_DSN: process.env.SMOKE_DB_DSN } : process.env;
+        const test = run("go", ["test", "./..."], { cwd: join(dir, "apps/api"), env });
+        if (test.status !== 0) fail(`go test exited ${test.status}\n${test.stdout}${test.stderr}`);
+        else pass(`go test ./...${process.env.SMOKE_DB_DSN ? " (kernel MySQL tests included)" : ""}`);
+        if (!process.env.SMOKE_DB_DSN) skip("go: kernel MySQL tests — set SMOKE_DB_DSN to a reachable MySQL to run them");
       } else {
         skip(`${stack}: go mod tidy / vet — 'go' not found on PATH`);
       }

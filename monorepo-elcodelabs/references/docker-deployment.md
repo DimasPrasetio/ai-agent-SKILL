@@ -233,6 +233,10 @@ DATABASE_URL=mysql://<slug>_user:<password>@host.docker.internal:3306/<slug>_db
 - `TRUSTED_PROXIES=172.16.0.0/12,127.0.0.1/32`: the host nginx reaches the container from the
   docker bridge. Without it, every user looks like one IP and per-IP rate limiting locks
   everyone out at once.
+- `APP_TIMEZONE=Asia/Jakarta` (Go): where business dates and calendar schedules are counted.
+  A branch in WITA/WIT keeps its own zone in the organization module.
+- The host MySQL must log row-based (`binlog_format=ROW`, MySQL 8's default): the kernel's task
+  queue claims rows with `SKIP LOCKED`, which statement-based replication cannot replay safely.
 
 Database + user, created once on the host MySQL:
 
@@ -263,6 +267,9 @@ app connects over that internal bridge without TLS, which MySQL 8's default
   `proxy_pass http://127.0.0.1:<port>` with `Host`, `X-Real-IP`, `X-Forwarded-For`,
   `X-Forwarded-Proto` headers.
 - **Never `default_server`** — only one is allowed per `:80` and another app already holds it.
+- Go: a second `location ~ ^/api/v1/[^/]+/stream` passes server-sent event streams with
+  `proxy_buffering off` and `proxy_read_timeout 1h` (the generated `infra/nginx/nginx.conf`
+  has it). An app upgraded to kernel 6 copies that block into its site and reloads nginx.
 - Point the domain's DNS A record at the VPS and check it resolves there **before** running
   `sudo certbot --nginx -d <domain>` (two earlier apps had records still aimed at an old host).
 - HSTS only after certbot has installed TLS.

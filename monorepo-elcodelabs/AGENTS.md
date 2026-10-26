@@ -18,7 +18,7 @@ step.
 
 ## The module contract
 
-The library installs code that builds on 30 generated files (kernel, config, shared Go
+The library installs code that builds on 42 generated files (kernel, config, shared Go
 packages, the registries, the web's shared contract, primitives, theme). Their fingerprints are
 in `scripts/module-contract.json`, recorded for the current kernel version. When one changes,
 `check-drift.mjs` fails until you decide:

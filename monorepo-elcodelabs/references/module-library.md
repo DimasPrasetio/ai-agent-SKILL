@@ -79,8 +79,12 @@ nothing from this skill to develop or test a module.
 writes its lines between the `elco:*` markers (Go registry, `sqlc.yaml`, `app/modules.ts`), its
 npm dependencies, its env names into `.env.example`, its row into `knowledge/MODULE_MAP.md`, and
 records everything in `modules.lock.json`. It refuses — changing nothing — when a required port
-is unwired or the kernel is older than the module needs. Missing ui kits a module lists are
-added first, automatically (`upgrade` does the same when a new version needs a new kit).
+is unwired or the kernel is older than the module needs. Missing kits a module lists — ui kits
+(`ui`) and Go kits (`go_kits`, shared Go code installed into `apps/api/internal/shared/<kit>`) —
+are added first, automatically (`upgrade` does the same when a new version needs a new kit).
+Event subscriptions a module declares (`listens`) are wired into `registry.go`
+(`d.Events.On(...)`) with its other lines; a publisher that is not installed simply never fires
+them.
 
 Then, as `add` prints: `npm install` · `cd apps/api && go mod tidy` · `npm run sqlc:generate` ·
 set the required env values in `.env` · `npm run migrate:up` · build and run.
@@ -91,8 +95,11 @@ New modules follow the standard ([backend-modular-monolith.md](backend-modular-m
 [backend-go.md](backend-go.md), [frontend.md](frontend.md)): own `ports/` for what they need
 from installed modules, adapters in the composition root, guarded routes through `d.Auth`,
 frontend contributed through `FrontendModule` (routes, `nav`, `slots`), UI from the ui kits and
-semantic tokens. A custom module must look like a library module — that is what lets it be
-promoted later.
+semantic tokens. On kernel 6: queries per call on `d.Tx.Conn(ctx)`, writes across modules inside
+one `d.Tx`, reactions through `d.Events` (declared in `emits`/`listens`), and — when its data
+belongs to a company — `company_id` in every table and query (`"scoped": true`). Code several
+custom modules share without a table or a route is a Go kit, not a copy in each. A custom module
+must look like a library module — that is what lets it be promoted later.
 
 ### 7. Record
 

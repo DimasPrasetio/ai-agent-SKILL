@@ -258,7 +258,7 @@ const dbUrlLine = backend === "go"
 file(".env.example", `APP_ENV=development
 APP_PORT=8080
 APP_NAME=${name}
-
+${backend === "go" ? "# Where business dates and calendar schedules are counted (IANA name).\nAPP_TIMEZONE=Asia/Jakarta\n" : ""}
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
@@ -665,7 +665,8 @@ Applies to: \`apps/api/**\`.
   with a small adapter that holds no business logic.
 - Forbidden: cross-module DB joins and cross-module foreign keys.
 - Cross-module relations are primitive IDs; resolve them through the module's own ports.
-- Transactions are scoped inside a single module; orchestrate cross-module flows via app services.
+- A change spanning modules commits atomically through the kernel's \`d.Tx\` (ports called with its ctx);
+  reactions that may happen later go through \`d.Events\` — never a transaction a module opens itself.
 - \`shared/\` holds only technical utilities (errors, response, request, logger, validator, pagination, utils) — never domain logic.
 `);
 // Registries and markers are what the module library installs into (references/backend-go.md,
@@ -820,7 +821,22 @@ server {
   server_name ${domain};
 
   client_max_body_size 10m;
-
+${backend === "go" ? `
+  # Server-sent event streams (request.AllowStream, at /api/v1/<module>/stream…): passed
+  # unbuffered and kept open — the app sends a heartbeat every 20 s.
+  location ~ ^/api/v1/[^/]+/stream {
+    proxy_pass http://127.0.0.1:${vpsPort};
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+  }
+` : ""}
   location / {
     proxy_pass http://127.0.0.1:${vpsPort};
     proxy_http_version 1.1;
@@ -1198,7 +1214,7 @@ file("infra/elcodelabs/.env.production.example", `# PRODUCTION .env — elcodela
 APP_ENV=production
 APP_PORT=8080
 APP_NAME=${name}
-
+${backend === "go" ? "APP_TIMEZONE=Asia/Jakarta\n" : ""}
 # --- Database: the host's shared MySQL, ONE database + ONE user for this app only ------
 # Create both once on the host — the SQL is in knowledge/DEPLOYMENT.md.
 # Password: \`openssl rand -hex 24\` (hex stays URL-safe inside the DSN).
@@ -1273,6 +1289,11 @@ const ciApiJob = backend === "go"
         run: go install -tags mysql github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: node scripts/check-migrations.mjs "\${{ github.event.pull_request.base.sha || github.event.before }}"
       - run: node scripts/migrate.mjs up && node scripts/migrate.mjs down -all && node scripts/migrate.mjs up
+      # The kernel's own MySQL tests: transactions, deadlock retry, tasks, events, schedules.
+      - run: go test ./internal/kernel/...
+        working-directory: apps/api
+        env:
+          KERNEL_TEST_DSN: "root:@tcp(127.0.0.1:3306)/"
 `
   : "";
 file(".github/workflows/ci.yml", `name: ci
@@ -1529,7 +1550,7 @@ file("apps/web/src/shared/kernel.ts", `/**
  * apps/api/internal/kernel (see the changelog there). Library modules state the minimum they
  * need; the module installer reads it from here when a project has no Go API.
  */
-export const KERNEL_VERSION = 5;
+export const KERNEL_VERSION = 6;
 `);
 
 file("apps/web/src/shared/access.tsx", `import { createContext, useContext } from "react";
@@ -1566,7 +1587,9 @@ export type AppEvent =
   /** Someone signed in or out, or the session expired. */
   | "session:changed"
   /** The signed-in user's own profile changed (their name): whoever shows it reloads it. */
-  | "profile:changed";
+  | "profile:changed"
+  /** The active company or branch changed (shared/scope.ts): every page reloads its data. */
+  | "scope:changed";
 
 const listeners = new Map<AppEvent, Set<() => void>>();
 
@@ -1582,6 +1605,48 @@ export function onAppEvent(event: AppEvent, fn: () => void): () => void {
   return () => {
     set.delete(fn);
   };
+}
+`);
+
+file("apps/web/src/shared/scope.ts", `import { useEffect, useState } from "react";
+import { emitAppEvent, onAppEvent } from "@/shared/app-events";
+
+/**
+ * The company and branch this tab works in — "<company>" or "<company>:<branch>", empty for the
+ * user's default. Sent with every request as X-Scope; the API validates it against where the
+ * user is placed. Set by an organization module's picker (slot "shell:scope"); an app with one
+ * company never sets it.
+ */
+const KEY = "elco.scope";
+
+function read(): string {
+  try {
+    return sessionStorage.getItem(KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function getScope(): string {
+  return read();
+}
+
+/** Switches this tab to scope and tells every page to reload ("scope:changed"). */
+export function setScope(scope: string): void {
+  try {
+    if (scope) sessionStorage.setItem(KEY, scope);
+    else sessionStorage.removeItem(KEY);
+  } catch {
+    // Storage blocked: the scope lasts until the page reloads.
+  }
+  emitAppEvent("scope:changed");
+}
+
+/** The current scope; the component re-renders when it changes. */
+export function useScope(): string {
+  const [scope, set] = useState(read);
+  useEffect(() => onAppEvent("scope:changed", () => set(read())), []);
+  return scope;
 }
 `);
 
@@ -1662,9 +1727,10 @@ export interface NavItem {
 /**
  * Where modules put content into another module's screen. Open by design: a module hosting a
  * slot names it "<owner>:<place>" (e.g. "user-menu:items", "settings:sections") and documents
- * it; the frame's own two are "sidebar-footer" and "header-end".
+ * it; the frame's own are "sidebar-footer", "header-end", and "shell:scope" (the company/branch
+ * picker an organization module puts in the header).
  */
-export type SlotName = "sidebar-footer" | "header-end" | (string & {});
+export type SlotName = "sidebar-footer" | "header-end" | "shell:scope" | (string & {});
 
 export interface Composition {
   nav: NavItem[];
@@ -2024,6 +2090,7 @@ export function BareLayout() {
 `);
 
 file("apps/web/src/shared/services/http-client.ts", `import axios from "axios";
+import { getScope } from "@/shared/scope";
 
 export const httpClient = axios.create({
   // Empty = same origin. Proxied by Vite in dev, served by the same container in
@@ -2054,6 +2121,9 @@ export function onUnauthorized(handler: () => void): () => void {
 
 httpClient.interceptors.request.use((config) => {
   if (authToken) config.headers.Authorization = \`Bearer \${authToken}\`;
+  // The company/branch this tab works in; the API checks it against the user's placement.
+  const scope = getScope();
+  if (scope) config.headers["X-Scope"] = scope;
   return config;
 });
 
@@ -2224,8 +2294,22 @@ sql:
     "internal/kernel/kernel.go",
     "internal/kernel/jobs.go",
     "internal/kernel/jobs_test.go",
+    "internal/kernel/calendar.go",
+    "internal/kernel/calendar_test.go",
     "internal/kernel/audit.go",
     "internal/kernel/audit_test.go",
+    "internal/kernel/clock.go",
+    "internal/kernel/scope.go",
+    "internal/kernel/scope_test.go",
+    "internal/kernel/tx.go",
+    "internal/kernel/tx_test.go",
+    "internal/kernel/tasks.go",
+    "internal/kernel/events.go",
+    "internal/kernel/events_test.go",
+    "internal/kernel/http.go",
+    "internal/kernel/kernel_mysql_test.go",
+    "internal/kernel/kerneltest/kerneltest.go",
+    "internal/kernel/kerneltest/kerneltest_test.go",
     "internal/modules/registry.go",
     "internal/server/server.go",
     "internal/server/middleware.go",
@@ -2235,6 +2319,8 @@ sql:
     "internal/shared/pagination/pagination.go",
     "internal/shared/request/request.go",
     "internal/shared/request/request_test.go",
+    "internal/shared/request/stream.go",
+    "internal/shared/request/stream_test.go",
     "internal/shared/response/response.go",
     "internal/shared/validator/validator.go",
   ]) {
@@ -2246,6 +2332,9 @@ sql:
   const baseline = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   file(`apps/api/migrations/${baseline}_baseline.up.sql`, `-- Baseline: golang-migrate fails \`up\` on an empty migrations directory.\nSELECT 1;\n`);
   file(`apps/api/migrations/${baseline}_baseline.down.sql`, `SELECT 1;\n`);
+  // The kernel's own tables (tasks, schedules) — right after the baseline.
+  const kernelMigration = String(BigInt(baseline) + 1n);
+  for (const dir of ["up", "down"]) template(`go/migrations/kernel_6.${dir}.sql.tmpl`, `apps/api/migrations/${kernelMigration}_kernel_6.${dir}.sql`, {});
   file("scripts/sqlc.mjs", `#!/usr/bin/env node
 // sqlc wrapper. sqlc refuses a config with no sql: block ("no packages") — the normal state
 // of a project until a module with queries is installed — so skip instead of failing.
