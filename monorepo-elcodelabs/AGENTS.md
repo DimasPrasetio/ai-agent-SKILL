@@ -43,8 +43,25 @@ npm run verify        # check-drift → smoke-test (needs Go, Node, MySQL) → p
 
 The pre-commit hook runs the fast part (`check-drift.mjs` and `package.mjs --check`, so
 `dist/monorepo-elcodelabs.skill` never lags its sources); CI runs all of it. A change to the
-kernel or the frontend contract is also checked against the library:
+kernel or the frontend contract is also checked against the library before it is released:
 `node $ELCO_MODULES/scripts/testbed.mjs --skill <this folder>`.
+
+## Releasing the kernel to the module library
+
+The library does not read this skill. It pins one kernel release in its `kernel/` folder (a
+project scaffolded from a release tag, the references, and a lock of every file's hash), and
+its module developers work from that alone — they cannot change the kernel, only ask for a
+change ("Kernel request" issue there). So a kernel change reaches the library in these steps:
+
+1. Change the kernel here, decide compatible / additive / breaking (above), and run the
+   library's testbed against this working copy (`--skill`, above): modules released for the
+   previous kernel must still pass — the kernel only adds (`backend-go.md` › Kernel versions).
+2. Commit. The post-commit hook tags the release `monorepo-elcodelabs/kernel/v<N>.<R>` whenever
+   the commit changes what a project or the references contain (`scripts/kernel-tag.mjs`; CI
+   fails on push for an untagged one). Push with `git push --follow-tags`.
+3. In the library: `npm run kernel:sync -- --skill <this folder>` (the newest tag; it scaffolds
+   from the tag, never from a working tree), `npm run testbed`, and commit `kernel/` by itself.
+   Then update modules that should use what is new (`requires_kernel`, versions).
 
 Never bypass the hook (`git commit --no-verify`) to land a failing check. If a check is wrong,
 fix the check and say why in the same commit.

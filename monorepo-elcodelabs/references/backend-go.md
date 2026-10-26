@@ -221,6 +221,13 @@ bump. Record what changed in the comment above `Version`. The skill's `check-dri
 the line: it fails when the three version numbers disagree or a contract file changed without a
 decision (the skill's `AGENTS.md`).
 
+**Compatibility.** A new kernel only adds: every module released for kernel N compiles and
+behaves the same on N+1 — proven by running the library's testbed before the release. Removing
+or changing something a module may rely on takes two kernels: one marks it deprecated (a doc
+comment and a row here), a later one — declared breaking, with upgrade notes in its row —
+removes it. Releases are tagged `monorepo-elcodelabs/kernel/v<N>.<R>`; the module library pins
+one (its `kernel/`) and its module developers build on that alone.
+
 | Version | Adds |
 |---|---|
 | 1 | `Deps` (`Config`, `DB`, `Log`, `Auth`), `shared/`, the module registries |

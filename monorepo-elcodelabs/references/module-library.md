@@ -71,7 +71,9 @@ node $LIB/scripts/module.mjs add auth --port UserStore=users
 ```
 
 A module states the minimum kernel it needs (`requires_kernel`); a project on an older kernel
-moves up first ([backend-go.md](backend-go.md#kernel-versions)).
+moves up first ([backend-go.md](backend-go.md#kernel-versions)). The library itself is built and
+tested on one pinned kernel release (its `kernel/` folder; `CATALOG.md` names it), so it needs
+nothing from this skill to develop or test a module.
 
 `add` copies the module into the project, adds its migrations with fresh timestamp versions,
 writes its lines between the `elco:*` markers (Go registry, `sqlc.yaml`, `app/modules.ts`), its

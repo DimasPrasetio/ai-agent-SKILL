@@ -21,11 +21,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the kernel release tags
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: node scripts/check-drift.mjs
       - run: node scripts/package.mjs --check
+      # Every change to what a project or the references contain is a tagged kernel release —
+      # what the module library pins (the post-commit hook tags; push with --follow-tags).
+      - if: github.event_name == 'push'
+        run: node scripts/kernel-tag.mjs --check
 
   smoke:
     runs-on: ubuntu-latest

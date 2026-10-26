@@ -1,0 +1,6 @@
+#!/bin/sh
+# Tags a kernel release (monorepo-elcodelabs/kernel/v<N>.<R>) when a commit changes what a
+# scaffolded project or the references contain — what the module library pins.
+# Push with: git push --follow-tags
+git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^monorepo-elcodelabs/' || exit 0
+exec node monorepo-elcodelabs/scripts/kernel-tag.mjs
