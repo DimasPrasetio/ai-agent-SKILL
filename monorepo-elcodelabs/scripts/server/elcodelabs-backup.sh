@@ -6,7 +6,9 @@
 #   /etc/systemd/system/elcodelabs-backup.{service,timer}
 #   /etc/elcodelabs/backup.env              settings, chmod 600 (backup.env.example)
 # Every database whose name ends in _db (one per app: <slug>_db) is included, so a new app is
-# backed up from its first night without touching this script.
+# backed up from its first night without touching this script. So is each app's data folder
+# (APPS_ROOT/<slug>/data — uploads and other files), as rsync snapshots: unchanged files are
+# hard links to the previous snapshot, so a day costs only what changed.
 #
 # Per database it keeps 5 daily, 2 weekly (Sunday), and 1 monthly (the 1st) dump — 8 files at
 # most. Weekly and monthly ones are hard links to a daily file: they take no extra space.
@@ -22,6 +24,8 @@ KEEP_WEEKLY="${KEEP_WEEKLY:-2}"
 KEEP_MONTHLY="${KEEP_MONTHLY:-1}"
 MIN_FREE_PCT="${MIN_FREE_PCT:-15}"
 DB_PATTERN="${DB_PATTERN:-_db$}"
+# Where the apps live (the deploy user's home: ~/<slug>/data). Unset: data folders are skipped.
+APPS_ROOT="${APPS_ROOT:-}"
 # MySQL's root through auth_socket: the unit runs as root.
 MYSQL="${MYSQL:-mysql}"
 MYSQLDUMP="${MYSQLDUMP:-mysqldump}"
@@ -34,9 +38,38 @@ notify() {
   fi
 }
 
+# Newest first by name, which carries the date: modification times are not reliable here —
+# rsync gives every snapshot folder the source folder's time, and hard links share theirs.
+
 # prune <dir> <keep>: drop all but the newest <keep> dumps in dir.
 prune() {
-  ls -1t "$1"/*.sql.gz 2>/dev/null | tail -n +$(( $2 + 1 )) | xargs -r rm -f
+  ls -1 "$1"/*.sql.gz 2>/dev/null | sort -r | tail -n +$(( $2 + 1 )) | xargs -r rm -f
+}
+
+# prune_dirs <dir> <keep>: drop all but the newest <keep> snapshot folders in dir.
+prune_dirs() {
+  ls -1d "$1"/*/ 2>/dev/null | sort -r | tail -n +$(( $2 + 1 )) | xargs -r rm -rf
+}
+
+# snapshot_files <slug> <dir>: today's snapshot of APPS_ROOT/<slug>/data under dir/files.
+snapshot_files() {
+  local src="$APPS_ROOT/$1/data" dest="$2/files" prev today_dir
+  [ -d "$src" ] || return 0
+  mkdir -p "$dest/daily" "$dest/weekly" "$dest/monthly"
+  today_dir="$dest/daily/$today"
+  prev="$(ls -1d "$dest/daily"/*/ 2>/dev/null | sort -r | head -1)"
+  rm -rf "$today_dir.tmp"
+  if ! rsync -a --delete ${prev:+--link-dest="$prev"} "$src/" "$today_dir.tmp/"; then
+    rm -rf "$today_dir.tmp"
+    return 1
+  fi
+  rm -rf "$today_dir"
+  mv "$today_dir.tmp" "$today_dir"
+  [ "$dow" = 7 ] && rm -rf "$dest/weekly/$today" && cp -al "$today_dir" "$dest/weekly/$today"
+  [ "$dom" = 01 ] && rm -rf "$dest/monthly/$today" && cp -al "$today_dir" "$dest/monthly/$today"
+  prune_dirs "$dest/daily" "$KEEP_DAILY"
+  prune_dirs "$dest/weekly" "$KEEP_WEEKLY"
+  prune_dirs "$dest/monthly" "$KEEP_MONTHLY"
 }
 
 # restore_test <db> <dump>: load the dump into a scratch database and compare table counts.
@@ -54,6 +87,10 @@ restore_test() {
 }
 
 mkdir -p "$ROOT"
+if [ -n "$APPS_ROOT" ] && ! command -v rsync >/dev/null; then
+  notify "Backup berkas dilewati: rsync tidak terpasang (sudo apt install rsync)."
+  APPS_ROOT=""
+fi
 free=$(( 100 - $(df -P "$ROOT" | awk 'NR==2 { sub("%", "", $5); print $5 }') ))
 if [ "$free" -lt "$MIN_FREE_PCT" ]; then
   notify "Backup DIBATALKAN: disk tinggal ${free}% (batas ${MIN_FREE_PCT}%). Kosongkan disk — MySQL berhenti jika disk penuh."
@@ -85,6 +122,9 @@ for db in $($MYSQL -N -e 'SHOW DATABASES' | grep -E "$DB_PATTERN"); do
   prune "$dir/monthly" "$KEEP_MONTHLY"
   if [ "$dom" = 01 ] && ! restore_test "$db" "$f"; then
     failed+=("$db (uji restore)")
+  fi
+  if [ -n "$APPS_ROOT" ] && ! snapshot_files "${db%_db}" "$dir"; then
+    failed+=("$db (berkas)")
   fi
   count=$(( count + 1 ))
 done

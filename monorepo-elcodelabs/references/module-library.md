@@ -46,7 +46,10 @@ accounts", "products and stock", "sales orders", "printable invoices", "back-off
 
 Also decide how each port of an installed module is wired: to another library module that has
 a ready-made adapter (`--port UserStore=users`), or to an adapter the project writes
-(`--port UserStore=expr:<Go expression>`). The UI kits a module builds on (`ui`) come along.
+(`--port UserStore=expr:<Go expression>`). An **optional** port left unwired becomes `nil` in the
+registry and switches its feature off (auth without `Mailer` has no "forgot password"); wire it
+later with `upgrade <id> --port <Port>=<provider>` — the module's registry lines then move after
+the provider's, so the composition root still compiles. The UI kits a module builds on (`ui`) come along.
 
 The theme preset is a design decision: the design brief ([design-research.md](design-research.md))
 names it (`Preset: bingkai-navy`) or settles on the project's own values.

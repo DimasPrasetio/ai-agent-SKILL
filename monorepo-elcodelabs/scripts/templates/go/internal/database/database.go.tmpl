@@ -41,6 +41,15 @@ func Open(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
+// Name is the database DB_DSN points at — what names this app's MySQL locks on a shared server.
+func Name(dsn string) string {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return ""
+	}
+	return cfg.DBName
+}
+
 // Ping reports whether the database answers within timeout.
 func Ping(ctx context.Context, db *sql.DB, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)

@@ -40,7 +40,7 @@ func requestID(base *slog.Logger) func(http.Handler) http.Handler {
 				id = hex.EncodeToString(b)
 			}
 			w.Header().Set("X-Request-ID", id)
-			ctx := logger.WithContext(r.Context(), base.With("request_id", id))
+			ctx := request.WithRequestID(logger.WithContext(r.Context(), base.With("request_id", id)), id)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

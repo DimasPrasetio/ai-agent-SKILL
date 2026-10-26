@@ -2,10 +2,12 @@ package request
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"__GO_MODULE__/internal/shared/apperror"
 )
@@ -46,5 +48,33 @@ func TestDecodeJSON(t *testing.T) {
 	}
 	if err := decode("application/json", `{"admin":true}`); !strings.Contains(err.Error(), "admin") {
 		t.Errorf("unknown field should be named, got %v", err)
+	}
+}
+
+func TestAllowTransferOutlivesTheServerTimeout(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("allow") {
+			AllowTransfer(w, 10<<20)
+		}
+		time.Sleep(700 * time.Millisecond) // a slow client, as far as the server can tell
+		_, _ = w.Write([]byte("whole file"))
+	}))
+	srv.Config.WriteTimeout = 300 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+	get := func(path string) string {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			return ""
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	if got := get("/"); got == "whole file" {
+		t.Fatal("the test is wrong: the server timeout did not cut the response")
+	}
+	if got := get("/?allow"); got != "whole file" {
+		t.Fatalf("with AllowTransfer the response was cut: %q", got)
 	}
 }

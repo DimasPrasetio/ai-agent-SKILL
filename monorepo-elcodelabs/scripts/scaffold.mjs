@@ -217,6 +217,7 @@ coverage/
 # Go
 /dist/api
 apps/api/tmp/
+apps/api/data/
 # Prisma
 apps/api/prisma/*.db
 `);
@@ -880,8 +881,10 @@ COPY --from=migrate/migrate:v4.18.1 /usr/local/bin/migrate /usr/local/bin/migrat
 COPY apps/api/migrations ./migrations
 COPY infra/elcodelabs/.env.production.example ./env.production.example
 COPY --from=web /repo/apps/web/dist ./public
+# DATA_DIR: mounted from ~/<slug>/data on the server; owned by the app user for local runs.
+RUN mkdir -p /app/data && chown app:app /app/data
 # GOMEMLIMIT: the Go GC aims below the compose memory limit (512M) instead of being OOM-killed.
-ENV APP_ENV=production APP_PORT=8080 PUBLIC_DIR=/app/public GOMEMLIMIT=400MiB
+ENV APP_ENV=production APP_PORT=8080 PUBLIC_DIR=/app/public DATA_DIR=/app/data GOMEMLIMIT=400MiB
 USER app
 EXPOSE 8080
 ${healthcheck}
@@ -968,9 +971,13 @@ services:
       - "host.docker.internal:host-gateway" # MySQL runs on the host, never in a container
     ports:
       - "127.0.0.1:${vpsPort}:8080" # loopback only; host nginx + TLS sits in front
-    # Anything the app writes needs an explicit volume owned by uid 10001, e.g.
-    #   volumes: ["./data/storage:/data/storage"]
-    read_only: true
+${backend === "go" ? `    # DATA_DIR: the one place the app writes (uploads, …) — survives deploys, owned by uid 10001
+    # (deploy.sh sees to it), backed up nightly with the database by the server's backup job.
+    volumes:
+      - ./data:/app/data
+` : `    # Anything the app writes needs an explicit volume owned by uid 10001, e.g.
+    #   volumes: ["./data:/app/data"]
+`}    read_only: true
     tmpfs:
       - /tmp
     security_opt:
@@ -1083,7 +1090,15 @@ DB_NAME="$(envval DB_NAME)"
 [ -n "$DB_NAME" ] || { echo "  ✗ DB_NAME is empty in .env"; exit 1; }
 [ "$DB_NAME" = "\${APP}_db" ] || echo "  ! DB_NAME is $DB_NAME, convention is \${APP}_db"
 mkdir -p backups
-PREV_TAG="$(envval IMAGE_TAG || true)"
+${backend === "go" ? `# DATA_DIR on the server: the app runs as uid 10001 on a read-only filesystem, so this folder
+# is the only place it can write. Created and handed over once; the check costs nothing after.
+# Not fatal: an app that stores no files runs without it, and one that does refuses to start
+# with a clear message, which the health check then reports.
+mkdir -p data
+if [ "$(stat -c %u data 2>/dev/null || stat -f %u data)" != "10001" ] && ! sudo -n chown 10001:10001 data 2>/dev/null; then
+  echo "  ! data/ does not belong to uid 10001 and sudo is not allowed here; an app that stores files needs: sudo chown 10001:10001 ~/\${APP}/data"
+fi
+` : ""}PREV_TAG="$(envval IMAGE_TAG || true)"
 echo "  ✓ .env 600, APP_ENV=production, DB_NAME=\${DB_NAME}; previous version: \${PREV_TAG:-(none)}"
 
 export IMAGE_TAG="$TAG"
@@ -1514,7 +1529,7 @@ file("apps/web/src/shared/kernel.ts", `/**
  * apps/api/internal/kernel (see the changelog there). Library modules state the minimum they
  * need; the module installer reads it from here when a project has no Go API.
  */
-export const KERNEL_VERSION = 4;
+export const KERNEL_VERSION = 5;
 `);
 
 file("apps/web/src/shared/access.tsx", `import { createContext, useContext } from "react";
@@ -1549,7 +1564,9 @@ file("apps/web/src/shared/app-events.ts", `/**
  */
 export type AppEvent =
   /** Someone signed in or out, or the session expired. */
-  | "session:changed";
+  | "session:changed"
+  /** The signed-in user's own profile changed (their name): whoever shows it reloads it. */
+  | "profile:changed";
 
 const listeners = new Map<AppEvent, Set<() => void>>();
 
@@ -1642,7 +1659,12 @@ export interface NavItem {
 }
 
 /** Named places in the layout that modules can fill. */
-export type SlotName = "sidebar-footer" | "header-end";
+/**
+ * Where modules put content into another module's screen. Open by design: a module hosting a
+ * slot names it "<owner>:<place>" (e.g. "user-menu:items", "settings:sections") and documents
+ * it; the frame's own two are "sidebar-footer" and "header-end".
+ */
+export type SlotName = "sidebar-footer" | "header-end" | (string & {});
 
 export interface Composition {
   nav: NavItem[];
@@ -2200,6 +2222,10 @@ sql:
     "internal/kernel/auth.go",
     "internal/kernel/authz.go",
     "internal/kernel/kernel.go",
+    "internal/kernel/jobs.go",
+    "internal/kernel/jobs_test.go",
+    "internal/kernel/audit.go",
+    "internal/kernel/audit_test.go",
     "internal/modules/registry.go",
     "internal/server/server.go",
     "internal/server/middleware.go",

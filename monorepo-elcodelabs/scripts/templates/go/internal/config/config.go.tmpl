@@ -17,6 +17,10 @@ type Config struct {
 	Name      string // APP_NAME
 	DBDSN     string // DB_DSN: user:pass@tcp(host:port)/db — no scheme prefix
 	PublicDir string // PUBLIC_DIR: built SPA served by the container; empty in dev
+	// DataDir (DATA_DIR) is the one folder the app writes to — uploads and anything else that
+	// must outlive a deploy. /app/data in the image (a volume on the server); "data" in dev,
+	// relative to apps/api. A module keeps its files in DataDir/<module>/.
+	DataDir string
 	// TrustedProxies (TRUSTED_PROXIES, comma-separated CIDRs) are the hops allowed to say who
 	// the client is through X-Forwarded-For — on the VPS, the host nginx over the docker bridge.
 	TrustedProxies []netip.Prefix
@@ -30,6 +34,7 @@ func Load() (*Config, error) {
 		Name:      Get("APP_NAME", "api"),
 		DBDSN:     Get("DB_DSN", ""),
 		PublicDir: Get("PUBLIC_DIR", ""),
+		DataDir:   Get("DATA_DIR", "data"),
 	}
 	if c.DBDSN == "" {
 		return nil, errors.New("DB_DSN is not set — copy .env.example to .env at the repo root")

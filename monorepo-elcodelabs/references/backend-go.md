@@ -142,7 +142,7 @@ there for the full code.
 `internal/config`, `database`, `kernel`, `server`, and `shared/` are the **kernel**: the stable
 surface every module — hand-written or from the module library — is built against.
 
-- **`kernel.Deps`** (`Config`, `DB`, `Log`, `Auth`, `Authz`) is what a module's `New` receives.
+- **`kernel.Deps`** (`Config`, `DB`, `Log`, `Auth`, `Authz`, `Jobs`, `Audit`) is what a module's `New` receives.
   A module keeps what it needs and never reaches for globals.
 - **`Deps.Auth`** is the one kernel-level port: authentication. A module guards a handler with
   `d.Auth.Require(h)` and reads the signed-in user with `d.Auth.UserID(r.Context())`; the
@@ -162,6 +162,19 @@ surface every module — hand-written or from the module library — is built ag
   user holds — a module managing people checks it before touching someone else's account.
   Two modules declaring one name stop the API; a **production** server with declared
   permissions and no provider refuses to start (development only warns).
+- **`Deps.Jobs`** runs scheduled background work: `d.Jobs.Every("<module>.<job>", interval, fn)`
+  in `New`. One scheduler for the whole app — at most two jobs at once, a job never overlaps
+  itself, a panic is logged — started after the registry and stopped after the HTTP server drains.
+  Each run holds a MySQL named lock scoped to the app's database, so while a deploy briefly runs
+  two containers a job still runs in one place. A job that works through rows still claims them
+  (`FOR UPDATE SKIP LOCKED`) and is safe to repeat; a run may be cut short by shutdown. No queue
+  service: a module that queues work keeps it in a table of its own (the library's `mailer`).
+- **`Deps.Audit`** records who changed what: `d.Audit.Record(ctx, kernel.AuditEntry{Module,
+  Action: "<thing>.<verb>", Target: "<type>:<id>", Summary, Data})` after the change is committed.
+  The kernel adds the time, the signed-in user (or `Actor` when there is none yet), the client IP,
+  and the request ID. Without a provider a record is a log line; an audit module (the library's
+  `audit-log`) stores it — `d.Audit.Provide(...)`. A storage failure is logged, never returned.
+  Never put secrets in `Data`.
 - **`kernel.Version`** is the contract version a library module's `requires_kernel` (in its
   `module.json`) is checked against — see [Kernel versions](#kernel-versions) for when it moves.
 - **Settings**: `config.Config` holds only what the kernel needs (`APP_ENV`, `APP_PORT`,
@@ -178,8 +191,11 @@ surface every module — hand-written or from the module library — is built ag
 - **Input**: `request.DecodeJSON` (only `application/json` — 415 otherwise, which is what keeps
   a cookie session safe from forged cross-site posts; 1 MiB cap; unknown fields rejected; messages
   never echo Go internals), `request.PathInt64`, `request.ClientIP` (the real client behind
-  nginx, from `TRUSTED_PROXIES`), `pagination.FromRequest`, and `validator.Validator`, which
-  collects every field error into one 422.
+  nginx, from `TRUSTED_PROXIES`; `ClientIPFrom(ctx)` and `RequestID(ctx)` where only the context
+  is at hand), `request.AllowTransfer(w, bytes)` (first thing in a handler that takes an upload
+  or sends a file: the server's 30 s read / 60 s write timeouts are sized for API calls),
+  `pagination.FromRequest`, and `validator.Validator`, which collects every field error into
+  one 422.
 - **Server**: `http.ServeMux` (method patterns such as `"GET /api/v1/orders/{id}"`), an unknown
   `/api/` path answers a JSON 404 instead of the SPA, and every request gets an `X-Request-ID`
   plus a logger carrying it and the client IP (`logger.From(r.Context())`). A state-changing
@@ -189,7 +205,10 @@ surface every module — hand-written or from the module library — is built ag
   in-flight requests for up to 25 s (inside the compose `stop_grace_period`).
 - **Config**: `APP_ENV` must be `development` or `production`, and explicit in the container
   (the image sets `PUBLIC_DIR`); the database session runs in UTC whatever the host MySQL's time
-  zone is.
+  zone is. `Config.DataDir` (`DATA_DIR`) is the one folder the app writes to: `/app/data` in the
+  image, mounted from `~/<slug>/data` on the server and backed up nightly; `data` (relative to
+  `apps/api`) in development. A module keeps its files in `DataDir/<module>/` and checks in `New`
+  that it can write there.
 - `shared/apperror` is not named `errors` so it never shadows the standard library package.
 
 ### Kernel versions
@@ -208,6 +227,7 @@ decision (the skill's `AGENTS.md`).
 | 2 | `Deps.Authz` (`authz.go`); web: `shared/access.tsx` (`useCan`), `shared/app-events.ts`, `FrontendModule.provider`, `NavItem.permission`, `shared/kernel.ts` |
 | 3 | web: `shared/lib/field-classes.ts` (`FIELD`), the Bingkai Navy primitives (`button` with `loading`, `input`, `card`, `dialog`), the `--animate-loader-slide` token in `theme.css`; Indonesian default messages in the kernel and starter pages |
 | 4 | security and safety: `DecodeJSON` JSON-only (415) with safe messages; cross-site writes refused; `request.ClientIP` + `TRUSTED_PROXIES`; `Authorizer.Covers` / `d.Authz.Covers`; duplicate permission names and production-without-provider refused; explicit `APP_ENV`; UTC DB sessions; 25 s shutdown; tests for these in `server/` and `shared/request/`; web: route error and 404 pages, `http-client` sends cookies to a separate API origin |
+| 5 | `Deps.Jobs` (`jobs.go`), `Deps.Audit` (`audit.go`), `request.RequestID` / `ClientIPFrom` / `AllowTransfer`, `Config.DataDir` and the `./data:/app/data` volume (compose, Dockerfile, deploy.sh), tests for jobs and audit; web: open slot names, the `profile:changed` app event |
 
 A project scaffolded on an older kernel moves up by copying the new kernel files from this
 skill's `scripts/templates/` (for 2: `internal/kernel/authz.go`, the `Authz` field in `Deps`,
@@ -217,7 +237,13 @@ its construction in `main.go`, and the web files above; for 3: `web/field-classe
 `internal/database/database.go`, `cmd/server/main.go`, `.dockerignore`, the Dockerfile lines,
 `deploy.sh`, and the web files `shared/components/feedback/RouteError.tsx`,
 `app/routes/index.tsx`, `shared/services/http-client.ts` — an authorization provider must
-implement `Covers`), then raising both version numbers.
+implement `Covers`; for 5: `internal/kernel/jobs.go` and `audit.go`, the `Jobs`/`Audit` fields in
+`Deps` and their construction, start, and stop in `main.go`, `request.go`, `middleware.go`,
+`config.go` (`DataDir`), `database.go` (`Name`), the `volumes:` entry in the prod compose, the
+`data/` step in `deploy.sh`, the Dockerfile's `/app/data`, the `.gitignore` line
+`apps/api/data/`, and the web files `shared/composition.tsx` and `shared/app-events.ts`; on the
+server, re-install `scripts/server/elcodelabs-backup.sh` with `APPS_ROOT` set so `data/` is
+backed up), then raising both version numbers.
 
 ## Module contract and the registry
 

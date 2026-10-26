@@ -78,6 +78,7 @@ Facts not passed to the scaffolder are written as `__VPS_PORT__` / `__GHCR_OWNER
   the one exception in `.dockerignore`), so `deploy.sh` can check the server's `.env` against
   the version it is about to start.
 - Go: `GOMEMLIMIT=400MiB` keeps the garbage collector under the compose memory limit (512M).
+- Go: `DATA_DIR=/app/data`, owned by the app user — the one writable folder (below).
 - The migration tool ships **inside the same image**, so the VPS migrates without any
   toolchain: Go → the `migrate` binary (copied from `migrate/migrate`) + `/app/migrations`;
   NestJS → Prisma CLI and engines in `node_modules` (`openssl` installed for Alpine);
@@ -136,7 +137,11 @@ What it must keep (the drift check asserts these):
 - `ports: ["127.0.0.1:<port>:8080"]` — loopback only.
 - Hardening: `read_only: true` + `tmpfs: /tmp`, `no-new-privileges`, a memory limit (512M by
   default on the shared 2 GB box), capped `json-file` logs, a `healthcheck` on `/readyz`.
-  Anything the app writes needs an explicit volume owned by uid 10001.
+  Anything the app writes needs an explicit volume owned by uid 10001. Go: the one volume is
+  `./data:/app/data` (`DATA_DIR`) — uploads and anything else that must outlive a deploy;
+  `deploy.sh` creates `~/<slug>/data` and hands it to uid 10001 (`sudo -n chown`) before the first
+  start — or, where sudo is not allowed, warns and goes on (an app that stores files then refuses
+  to start and says why). Uploads stream to it, never to `/tmp` (RAM in this container).
 - A `migrate` service under `profiles: ["ops"]` (same image, migration entrypoint), run once
   per deploy by `deploy.sh`, never by `up`.
 - **No** database service, ever.
@@ -174,6 +179,7 @@ Two layers, and neither is optional:
 | Layer | What | Where | Kept |
 |---|---|---|---|
 | Server, nightly | every `*_db` database on the host — a new app is included from its first night | `/var/backups/elcodelabs/<db>/{daily,weekly,monthly}/` | 5 daily, 2 weekly (Sunday), 1 monthly (the 1st): 8 files at most; weekly/monthly are hard links to a daily file, so they take no extra space |
+| Server, nightly | every app's data folder (`APPS_ROOT/<slug>/data`: uploads) | `/var/backups/elcodelabs/<db>/files/{daily,weekly,monthly}/` | the same rotation, as `rsync --link-dest` snapshots: an unchanged file is a hard link to the previous snapshot, so a day costs only what changed |
 | Per deploy | the state right before a migration | `~/<slug>/backups/pre-deploy.sql.gz` | 1, replaced each deploy |
 
 The nightly job ships with this skill in `scripts/server/` and is installed **once per server**
@@ -182,7 +188,7 @@ The nightly job ships with this skill in `scripts/server/` and is installed **on
 ```bash
 sudo install -D -m 700 elcodelabs-backup.sh /opt/elcodelabs/backup.sh
 sudo install -m 644 elcodelabs-backup.service elcodelabs-backup.timer /etc/systemd/system/
-sudo install -D -m 600 backup.env.example /etc/elcodelabs/backup.env   # then fill in Telegram
+sudo install -D -m 600 backup.env.example /etc/elcodelabs/backup.env   # then fill in Telegram and APPS_ROOT
 sudo systemctl daemon-reload && sudo systemctl enable --now elcodelabs-backup.timer
 sudo systemctl start elcodelabs-backup.service && journalctl -u elcodelabs-backup -n 20
 ```

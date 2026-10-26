@@ -25,7 +25,11 @@ import (
 //	   refuses a name two modules share; production refuses declared permissions without a
 //	   provider; APP_ENV must be explicit in the container; DB sessions in UTC; 25 s shutdown;
 //	   web: http-client sends cookies to a separate API origin, route error and 404 pages
-const Version = 4
+//	5  Deps.Jobs (scheduled background work, one place at a time across containers) and
+//	   Deps.Audit (who did what, with an audit module as provider); request.RequestID and
+//	   request.ClientIPFrom for a context; Config.DataDir (DATA_DIR, the one writable folder);
+//	   web: open slot names ("<owner>:<place>"), the "profile:changed" app event
+const Version = 5
 
 // Deps is what a module's New receives. A module keeps what it needs from it and never
 // reaches for globals instead.
@@ -37,4 +41,8 @@ type Deps struct {
 	Auth *AuthSlot
 	// Authz guards handlers by permission; an authorization module fills it (see AuthzSlot).
 	Authz *AuthzSlot
+	// Jobs runs scheduled background work (see JobsSlot).
+	Jobs *JobsSlot
+	// Audit records who changed what; an audit module stores it (see AuditSlot).
+	Audit *AuditSlot
 }

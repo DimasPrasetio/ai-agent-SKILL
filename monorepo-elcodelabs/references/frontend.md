@@ -201,7 +201,7 @@ module; everything it contributes goes through this object:
 |---|---|
 | `public` / `protected` | Its routes. Protected routes sit behind the guard and inside the layout. |
 | `nav` | Entries for the app's navigation (`label`, `to`, `icon`, `group`, `order`). |
-| `slots` | Content for named places in the layout (`"sidebar-footer"`, `"header-end"`). |
+| `slots` | Content for named places in another module's screen. The frame's own are `"sidebar-footer"` and `"header-end"`; a module hosting a slot names it `"<owner>:<place>"` and documents it in its README (e.g. auth's `"user-menu:items"`, settings' `"settings:sections"`). Each module's content is keyed by its id. Slot names are open strings, so the compiler no longer catches a misspelled one — copy the name from the host's README. |
 | `guard` | An element wrapping every protected route (renders `<Outlet />` when allowed). One module at most — normally auth. |
 | `layout` | The frame around protected pages (renders `<Outlet />`). One module at most — normally the app shell. |
 | `provider` | A component wrapping the whole app, e.g. the authorization module's `AccessContext`. |
@@ -214,8 +214,9 @@ module; everything it contributes goes through this object:
   the API enforces every permission itself.
 - `@/shared/app-events` (`emitAppEvent` / `onAppEvent`) is how a module tells the others
   something happened without importing them — e.g. auth emits `"session:changed"` and the
-  authorization module reloads the user's permissions. Add an event name only for something
-  every module may care about.
+  authorization module reloads the user's permissions; users emits `"profile:changed"` and auth
+  reloads the name in the user menu. Add an event name only for something every module may care
+  about.
 - `shared/kernel.ts` states the kernel version (see [backend-go.md](backend-go.md#kernel-versions)).
 
 ```tsx
