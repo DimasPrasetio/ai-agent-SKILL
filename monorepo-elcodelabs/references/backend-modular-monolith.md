@@ -147,3 +147,17 @@ OrderApplicationService
 ```
 
 Never call another module's repository directly.
+
+A flow across modules is **not atomic** — each step commits in its own module. Order the steps
+so that a failure part-way leaves nothing wrong: check first, then the step that is easiest to
+undo, the hardest last; make each step safe to repeat (an idempotency key, or "set" rather than
+"add"); and on failure after a commit, run the compensating call (`ReleaseStock` for
+`DecreaseStock`) or record the flow as failed for someone to finish. When a flow must be all or
+nothing, the data belongs in one module.
+
+## Deleting data other modules point at
+
+Records other modules refer to — people, customers, products — are **deactivated, never
+deleted**: references stay valid, history stays readable, and no module has to be told. Lists
+and pickers show active records; a lookup by ID still returns inactive ones (with their state)
+so old documents render. Hard delete is only for data nothing else can refer to.

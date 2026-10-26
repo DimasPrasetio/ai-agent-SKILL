@@ -22,13 +22,18 @@ type Permission struct {
 // Authorizer decides whether the signed-in user may do something.
 type Authorizer interface {
 	Can(ctx context.Context, permission string) bool
+	// Covers reports whether the signed-in user holds every permission the target user holds.
+	// A module managing people checks it before acting on someone else's account, so an
+	// operator can never reset an administrator's password or deactivate them.
+	Covers(ctx context.Context, target int64) bool
 }
 
 // AuthzSlot is the authorization every module receives in Deps.Authz. Like Auth, it is a
 // kernel port rather than a per-module one: nearly every module needs it.
 //
-// Without a provider the policy is "signed in = allowed", so a module works on its own; once
-// the composition root calls Provide (the rbac module), its decisions apply everywhere.
+// Without a provider the policy is "signed in = allowed", so a module works on its own while
+// it is developed; a production server refuses to start that way (Check). Once the composition
+// root calls Provide (the rbac module), its decisions apply everywhere.
 type AuthzSlot struct {
 	auth  *AuthSlot
 	mu    sync.RWMutex
@@ -41,13 +46,28 @@ func NewAuthzSlot(auth *AuthSlot) *AuthzSlot {
 	return &AuthzSlot{auth: auth, perms: map[string]Permission{}}
 }
 
-// Declare registers the permissions a module guards with. Call it in the module's New.
+// Declare registers the permissions a module guards with. Call it in the module's New. Two
+// modules declaring the same name would silently share one grant, so that stops the API.
 func (s *AuthzSlot) Declare(perms ...Permission) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, p := range perms {
+		if prev, ok := s.perms[p.Name]; ok && prev.Module != p.Module {
+			panic(fmt.Sprintf("authz: permission %q declared by both %q and %q — name it <module>.<action>", p.Name, prev.Module, p.Module))
+		}
 		s.perms[p.Name] = p
 	}
+}
+
+// Check reports permissions declared with nobody to decide them. In production that would
+// mean "signed in = allowed" for every guarded route, so the server refuses to start.
+func (s *AuthzSlot) Check() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.p == nil && len(s.perms) > 0 {
+		return fmt.Errorf("%d permission(s) declared but no authorization provider is set — install an authorization module (the library's rbac) and Provide it in registry.go", len(s.perms))
+	}
+	return nil
 }
 
 // Permissions returns every declared permission, sorted by name — the catalog an
@@ -80,6 +100,16 @@ func (s *AuthzSlot) provider() Authorizer {
 func (s *AuthzSlot) Can(ctx context.Context, permission string) bool {
 	if p := s.provider(); p != nil {
 		return p.Can(ctx, permission)
+	}
+	_, signedIn := s.auth.UserID(ctx)
+	return signedIn
+}
+
+// Covers reports whether the signed-in user may act on target's account: target holds no
+// permission the signed-in user lacks. Without a provider every signed-in user is equal.
+func (s *AuthzSlot) Covers(ctx context.Context, target int64) bool {
+	if p := s.provider(); p != nil {
+		return p.Covers(ctx, target)
 	}
 	_, signedIn := s.auth.UserID(ctx)
 	return signedIn

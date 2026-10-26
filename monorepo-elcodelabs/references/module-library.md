@@ -27,8 +27,8 @@ Everything below runs `node $LIB/scripts/module.mjs <command>` from the project 
 ### 1. Read the catalog — not the code
 
 Read `$LIB/CATALOG.md` (generated: every module's purpose, kind, what it offers, which ports it
-needs, when to use it and when not). It costs a few hundred lines however large the library
-grows. Open a module's `README.md` / `module.json` (`module.mjs info <id>`) only for the
+needs, when to use it and when not) — about one table row and one paragraph per module, so it
+grows with the library; at a few dozen modules it gets grouped by category. Open a module's `README.md` / `module.json` (`module.mjs info <id>`) only for the
 candidates. Do not read module source to decide.
 
 ### 2. Break the requirement into capabilities
@@ -104,6 +104,14 @@ ones were added). Record the preset in `knowledge/DESIGN.md`.
   `upgrade` leaves it alone.
 - Never copy files from the library by hand, and never re-run `add` over an installed module:
   the lockfile would not know, and upgrades would break.
+- A module no longer needed: `module.mjs remove <id>` deletes the files the project did not
+  change, its registry lines, sqlc block, and lock entry — refused while another installed module
+  wires a port to it or builds on it as a kit. Its migrations and tables stay: an uninstall
+  never drops data.
+- A module's settings go into `.env.example` and `infra/elcodelabs/.env.production.example`
+  (a required one as `KEY=<required>`); `deploy.sh` refuses a version whose required settings
+  the server's `.env` lacks. Its Go dependencies (`go_dependencies`) are pinned in `go.mod`, and
+  an npm package the project already has at another version keeps the higher one, with a note.
 
 ## Upgrading
 
@@ -114,7 +122,11 @@ node $LIB/scripts/module.mjs upgrade <id>     # or: upgrade preset · upgrade --
 
 Exit code 2 means conflicts: resolve the `<<<<<<<` markers, then build and test. New migrations
 arrive with fresh versions; applied ones are never rewritten (the tool warns if the library
-changed one). Upgrade with the user's go-ahead, one module at a time, and run the tests after.
+changed one). A file the project deleted stays deleted, a file that moved to another module is
+left to that module, and changed registry lines (Go import, build lines, web registration) are
+rewritten. The merge base is the library commit recorded at install; when that commit is not on
+this machine, the module's release tag `<id>/v<version>` stands in (`git fetch --tags` in the
+library). Upgrade with the user's go-ahead, one module at a time, and run the tests after.
 
 ## Giving back: promote
 

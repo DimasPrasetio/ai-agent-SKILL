@@ -1,0 +1,9 @@
+[Unit]
+Description=elcodelabs: back up every app database (rotated)
+After=mysql.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/elcodelabs/backup.sh
+Nice=10
+IOSchedulingClass=idle

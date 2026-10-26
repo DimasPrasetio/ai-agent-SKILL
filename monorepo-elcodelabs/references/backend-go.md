@@ -158,9 +158,12 @@ surface every module — hand-written or from the module library — is built ag
   a provider the policy is "signed in = allowed", so a module works alone; an authorization
   module (the library's `rbac`) fills the slot with `d.Authz.Provide(...)` and reads the catalog
   from `d.Authz.Permissions()`. Permissions come from code; who holds them is data.
-- **`kernel.Version`** is the contract version. A library module states the version it needs
-  (`requires_kernel` in its `module.yaml`). Bump it only for a change that would break an
-  existing module; adding something is not one.
+  `d.Authz.Covers(ctx, target)` asks whether the signed-in user holds every permission the target
+  user holds — a module managing people checks it before touching someone else's account.
+  Two modules declaring one name stop the API; a **production** server with declared
+  permissions and no provider refuses to start (development only warns).
+- **`kernel.Version`** is the contract version a library module's `requires_kernel` (in its
+  `module.json`) is checked against — see [Kernel versions](#kernel-versions) for when it moves.
 - **Settings**: `config.Config` holds only what the kernel needs (`APP_ENV`, `APP_PORT`,
   `APP_NAME`, `DB_DSN`, `PUBLIC_DIR`). A module reads its own settings with `config.Get` or
   `config.Require` in its `New`, so a missing required value stops the API at startup.
@@ -172,31 +175,49 @@ surface every module — hand-written or from the module library — is built ag
   `Error(w, r, err)`. A handler returns client errors as `*apperror.Error` (`BadRequest`,
   `NotFound`, `Validation`, …); any other error becomes a logged, generic 500, so internals
   never leak.
-- **Input**: `request.DecodeJSON` (1 MiB cap, unknown fields rejected), `request.PathInt64`,
-  `pagination.FromRequest`, and `validator.Validator`, which collects every field error into
-  one 422.
-- **Server**: `http.ServeMux` (Go 1.22+ method patterns such as `"GET /api/v1/orders/{id}"`),
-  an unknown `/api/` path answers a JSON 404 instead of the SPA, and every request gets an
-  `X-Request-ID` plus a logger carrying it (`logger.From(r.Context())`). Panics become a 500
-  envelope. `SIGTERM` (`docker stop`) drains in-flight requests before exit.
+- **Input**: `request.DecodeJSON` (only `application/json` — 415 otherwise, which is what keeps
+  a cookie session safe from forged cross-site posts; 1 MiB cap; unknown fields rejected; messages
+  never echo Go internals), `request.PathInt64`, `request.ClientIP` (the real client behind
+  nginx, from `TRUSTED_PROXIES`), `pagination.FromRequest`, and `validator.Validator`, which
+  collects every field error into one 422.
+- **Server**: `http.ServeMux` (method patterns such as `"GET /api/v1/orders/{id}"`), an unknown
+  `/api/` path answers a JSON 404 instead of the SPA, and every request gets an `X-Request-ID`
+  plus a logger carrying it and the client IP (`logger.From(r.Context())`). A state-changing
+  `/api/` call a browser marks as coming from another site (`Sec-Fetch-Site`, or a foreign
+  `Origin`) is refused with 403 — sibling subdomains share a "site" and its cookies, so this holds
+  whatever domains the app runs on. Panics become a 500 envelope. `SIGTERM` (`docker stop`) drains
+  in-flight requests for up to 25 s (inside the compose `stop_grace_period`).
+- **Config**: `APP_ENV` must be `development` or `production`, and explicit in the container
+  (the image sets `PUBLIC_DIR`); the database session runs in UTC whatever the host MySQL's time
+  zone is.
 - `shared/apperror` is not named `errors` so it never shadows the standard library package.
 
 ### Kernel versions
 
 `kernel.Version` (and `apps/web/src/shared/kernel.ts`) is the contract number a library module's
-`requires_kernel` is checked against — as a minimum. Bump it when the kernel gains something
-modules may rely on; record what in the comment above `Version`.
+`requires_kernel` is checked against — as a minimum. Bump it whenever the kernel gains or changes
+something a module may rely on — an addition included, since a module using it must be able to
+refuse an older kernel. A change no module can notice (a comment, a clearer message) is not a
+bump. Record what changed in the comment above `Version`. The skill's `check-drift.mjs` holds
+the line: it fails when the three version numbers disagree or a contract file changed without a
+decision (the skill's `AGENTS.md`).
 
 | Version | Adds |
 |---|---|
 | 1 | `Deps` (`Config`, `DB`, `Log`, `Auth`), `shared/`, the module registries |
 | 2 | `Deps.Authz` (`authz.go`); web: `shared/access.tsx` (`useCan`), `shared/app-events.ts`, `FrontendModule.provider`, `NavItem.permission`, `shared/kernel.ts` |
 | 3 | web: `shared/lib/field-classes.ts` (`FIELD`), the Bingkai Navy primitives (`button` with `loading`, `input`, `card`, `dialog`), the `--animate-loader-slide` token in `theme.css`; Indonesian default messages in the kernel and starter pages |
+| 4 | security and safety: `DecodeJSON` JSON-only (415) with safe messages; cross-site writes refused; `request.ClientIP` + `TRUSTED_PROXIES`; `Authorizer.Covers` / `d.Authz.Covers`; duplicate permission names and production-without-provider refused; explicit `APP_ENV`; UTC DB sessions; 25 s shutdown; tests for these in `server/` and `shared/request/`; web: route error and 404 pages, `http-client` sends cookies to a separate API origin |
 
 A project scaffolded on an older kernel moves up by copying the new kernel files from this
 skill's `scripts/templates/` (for 2: `internal/kernel/authz.go`, the `Authz` field in `Deps`,
 its construction in `main.go`, and the web files above; for 3: `web/field-classes.ts`, the
-`web/primitives/*`, and the `@theme` block of `web/theme.css`), then raising both version numbers.
+`web/primitives/*`, and the `@theme` block of `web/theme.css`; for 4: `internal/shared/request/`,
+`internal/server/`, `internal/kernel/authz.go`, `internal/config/config.go`,
+`internal/database/database.go`, `cmd/server/main.go`, `.dockerignore`, the Dockerfile lines,
+`deploy.sh`, and the web files `shared/components/feedback/RouteError.tsx`,
+`app/routes/index.tsx`, `shared/services/http-client.ts` — an authorization provider must
+implement `Covers`), then raising both version numbers.
 
 ## Module contract and the registry
 

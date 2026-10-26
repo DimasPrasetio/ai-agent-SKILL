@@ -48,7 +48,7 @@ jobs:
           node-version: 22
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.27"
       - name: sqlc
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: node scripts/smoke-test.mjs

@@ -99,7 +99,8 @@ monorepo-elcodelabs/
 │   ├── check-drift.mjs            # references ↔ scaffolder ↔ module contract
 │   ├── module-contract.json       # fingerprints of the files library modules build on
 │   ├── smoke-test.mjs
-│   └── package.mjs
+│   ├── package.mjs
+│   └── server/                    # installed once per VPS: nightly rotated DB backups
 ├── evals/                         # dev/QA test cases (NOT shipped in the .skill)
 ├── dist/
 │   └── monorepo-elcodelabs.skill    # prebuilt install package

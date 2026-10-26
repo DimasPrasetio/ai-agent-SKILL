@@ -221,6 +221,15 @@ apps/api/tmp/
 apps/api/prisma/*.db
 `);
 
+// LF everywhere: a Windows checkout with core.autocrlf would otherwise make every file look
+// changed to the module library's hashes and 3-way merges.
+file(".gitattributes", `* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+`);
+
 file(".dockerignore", `node_modules
 **/node_modules
 dist
@@ -235,6 +244,8 @@ infra/elcodelabs
 .env
 .env.*
 *.md
+# Shipped inside the image so deploy.sh can check the server's .env before migrating.
+!infra/elcodelabs/.env.production.example
 `);
 
 const dbName = `${slug}_db`;
@@ -484,10 +495,42 @@ without TLS, which MySQL 8's default \`caching_sha2_password\` rejects (ERROR 20
 
 merge to \`main\` → \`ci\` green → \`release-image\` pushes \`${image}:<git-sha>\` →
 on the VPS: \`cd ~/${slug} && ./deploy.sh <git-sha>\`
-(preflight → pull → DB backup → migrate → up → wait for \`/readyz\`).
+(preflight → pull → check \`.env\` has every setting the image lists → dump the database to
+\`backups/pre-deploy.sql.gz\` → migrate → up → wait for \`/readyz\`). Nothing changes before
+the \`.env\` check passes.
 
-Rollback = \`./deploy.sh <older-git-sha>\`. Migrations are forward-only: a rollback across a
-schema change needs a forward fix, not a down-migration on production.
+**Rollback** = \`./deploy.sh <older-git-sha>\`. The schema stays where it is (migrations are
+forward-only): ${backend === "go" ? "deploy.sh sees the database is newer than that image and skips migrate" : "run it with \`SKIP_MIGRATE=1\` when rolling back past a schema change"}, and the
+older version runs on the newer schema — which works only because every release follows
+expand/contract (\`.claude/rules/database.md\`).
+
+## Backups and restore
+
+- **Nightly, rotated** — the server's backup job (installed once per server, not per app;
+  the skill's \`scripts/server/\`): \`/var/backups/elcodelabs/${dbName}/{daily,weekly,monthly}/\`,
+  5 daily, 2 weekly, 1 monthly, test-restored on the 1st, failures reported to Telegram.
+- **Before each migration** — \`~/${slug}/backups/pre-deploy.sql.gz\`, replaced every deploy.
+
+**Restore** (lost or damaged data):
+1. \`docker compose -f docker-compose.prod.yml stop app\`
+2. Pick the dump: \`sudo ls -lt /var/backups/elcodelabs/${dbName}/*/\` or \`backups/pre-deploy.sql.gz\`.
+3. Check it in a scratch database first:
+   \`sudo mysql -e 'CREATE DATABASE ${dbName}_check'\` · \`gunzip -c <dump> | sudo mysql ${dbName}_check\` ·
+   look at the data · \`sudo mysql -e 'DROP DATABASE ${dbName}_check'\`
+4. Replace: \`sudo mysql -e 'DROP DATABASE ${dbName}; CREATE DATABASE ${dbName} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'\`,
+   then \`gunzip -c <dump> | sudo mysql ${dbName}\` (the user's grants on \`${dbName}.*\` survive the drop).
+5. \`./deploy.sh <git-sha>\` with the version to run — it migrates the restored schema forward if needed.
+
+## A migration failed
+
+deploy.sh stops before the new version starts; the next deploy refuses while the database is
+marked *dirty*. MySQL commits each DDL statement at once, so a file that failed half-way is
+partly applied — that is why one migration file holds one schema change.
+1. Read the error in the deploy output. \`docker compose -f docker-compose.prod.yml --profile ops run --rm migrate version\`
+   shows \`<version> (dirty)\`.
+2. Safe path: restore \`backups/pre-deploy.sql.gz\` (Restore, steps 1–4). Only if the failed
+   statement left nothing behind: \`… run --rm migrate force <previous-version>\`.
+3. Fix it in a **new** migration (never edit one that ran anywhere), release, deploy.
 
 ## First-time server setup (once)
 
@@ -513,6 +556,10 @@ Every step below changes the shared server — do it only with the owner's go-ah
    \`sudo nginx -t && sudo systemctl reload nginx\`, then \`sudo certbot --nginx -d ${domain}\`
    (point the domain's DNS A record at the VPS first).
 7. **Registry entry** — add this app's row to the playbook's App registry.
+8. **Backups** — if this server has no \`elcodelabs-backup.timer\` yet
+   (\`systemctl list-timers | grep elcodelabs-backup\`), install it once
+   (references/docker-deployment.md › Backups in the skill). The new database is included from
+   its first night.
 `);
 file("knowledge/decisions/ADR-0001-monorepo-structure.md", `# ADR-0001: Monorepo structure
 
@@ -690,7 +737,16 @@ Applies to: \`apps/api/**\`.
 - A repository accesses only the tables its own module owns.
 - Cross-module boundary rules (no joins, no foreign keys, relations as primitive IDs) are
   authoritative in \`backend-modular-monolith.md\` — not restated here.
-${backend === "go" ? "- Go: golang-migrate for migrations (timestamp-versioned), sqlc for access (one generated package\n  per module), database/sql + MySQL driver. Not GORM.\n" : ""}${backend === "nestjs" ? "- NestJS: Prisma migrations (not TypeORM unless explicitly requested).\n" : ""}${backend === "express" ? "- Express: migration tool is not locked — confirm the choice before implementing migrations.\n" : ""}`);
+- Migrations are forward-only and **expand/contract**: a release only adds (tables, nullable or
+  defaulted columns, indexes), so the previous version still runs on the new schema — a
+  rollback deploys the older image without undoing migrations. A column is dropped or renamed
+  in a later release, once no deployed version reads it. Never edit a migration that ran
+  anywhere; add a new one.
+- One schema change per migration file: MySQL commits DDL at once, so a file that fails
+  half-way cannot roll back.
+- Times are stored in UTC (the API's DB sessions run in UTC); "today" for a user is computed
+  in Asia/Jakarta in code.
+${backend === "go" ? "- Go: golang-migrate for migrations (timestamp-versioned; CI refuses one older than the newest\n  on main — \`node scripts/check-migrations.mjs <base> --fix\` renames it), sqlc for access (one\n  generated package per module), database/sql + MySQL driver. Not GORM.\n" : ""}${backend === "nestjs" ? "- NestJS: Prisma migrations (not TypeORM unless explicitly requested).\n" : ""}${backend === "express" ? "- Express: migration tool is not locked — confirm the choice before implementing migrations.\n" : ""}`);
 file(".claude/rules/deployment.md", `# Rule: Deployment (elcodelabs VPS)
 
 Applies to: \`infra/**\`, \`.github/workflows/**\`, \`docker-compose.yml\`, \`.dockerignore\`.
@@ -807,7 +863,7 @@ COPY apps/web ./apps/web
 ${npmInstall}
 RUN npm run build -w apps/web
 
-FROM golang:1.22-alpine AS api
+FROM golang:1.27-alpine AS api
 ENV CGO_ENABLED=0 GOFLAGS=-buildvcs=false
 WORKDIR /src/apps/api
 COPY apps/api/go.mod apps/api/go.sum ./
@@ -815,15 +871,17 @@ RUN go mod download
 COPY apps/api ./
 RUN go build -trimpath -ldflags "-s -w" -o /out/api ./cmd/server
 
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata wget \\
  && addgroup -S app && adduser -S -G app -u 10001 app
 WORKDIR /app
 COPY --from=api /out/api ./api
 COPY --from=migrate/migrate:v4.18.1 /usr/local/bin/migrate /usr/local/bin/migrate
 COPY apps/api/migrations ./migrations
+COPY infra/elcodelabs/.env.production.example ./env.production.example
 COPY --from=web /repo/apps/web/dist ./public
-ENV APP_ENV=production APP_PORT=8080 PUBLIC_DIR=/app/public
+# GOMEMLIMIT: the Go GC aims below the compose memory limit (512M) instead of being OOM-killed.
+ENV APP_ENV=production APP_PORT=8080 PUBLIC_DIR=/app/public GOMEMLIMIT=400MiB
 USER app
 EXPOSE 8080
 ${healthcheck}
@@ -849,7 +907,8 @@ COPY --from=build /repo/node_modules ./node_modules
 COPY --from=build /repo/apps/api/package.json ./apps/api/
 COPY --from=build /repo/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /repo/apps/api/dist ./apps/api/dist
-${prisma ? "COPY --from=build /repo/apps/api/prisma ./apps/api/prisma\n" : ""}COPY --from=build /repo/apps/web/dist ./public
+${prisma ? "COPY --from=build /repo/apps/api/prisma ./apps/api/prisma\n" : ""}COPY --from=build /repo/infra/elcodelabs/.env.production.example ./env.production.example
+COPY --from=build /repo/apps/web/dist ./public
 ENV NODE_ENV=production APP_ENV=production APP_PORT=8080 PUBLIC_DIR=/app/public
 USER app
 EXPOSE 8080
@@ -942,7 +1001,34 @@ else
   echo "    docker-compose.prod.yml and call it here, or rerun with SKIP_MIGRATE=1."
   exit 1
 fi`
-  : `$COMPOSE --profile ops run --rm migrate`;
+  : backend === "go"
+  ? `if [ "\${SKIP_MIGRATE:-0}" = "1" ]; then
+  echo "  (SKIP_MIGRATE=1 — skipped)"
+else
+  # Where the database is, and the newest migration this image ships.
+  current="$($COMPOSE --profile ops run --rm migrate version 2>&1 | tail -1 || true)"
+  newest="$($COMPOSE --profile ops run --rm --entrypoint sh migrate -c 'ls /app/migrations' 2>/dev/null \\
+    | sed -n 's/^\\([0-9][0-9]*\\)_.*\\.up\\.sql$/\\1/p' | sort -n | tail -1 || true)"
+  case "$current" in
+    *dirty*)
+      echo "  ✗ the database is marked dirty: a migration failed half-way (\${current})."
+      echo "    Nothing was started. Recovery: knowledge/DEPLOYMENT.md › A migration failed."
+      exit 1 ;;
+  esac
+  cur="$(printf '%s' "$current" | grep -oE '^[0-9]+' || true)"
+  if [ -n "$cur" ] && [ -n "$newest" ] && [ "$cur" -gt "$newest" ]; then
+    # A rollback: this older image does not know the newer migrations. The schema stays —
+    # releases follow expand/contract, so the previous version runs on it.
+    echo "  ! database is at \${cur}, newer than this image (\${newest}): rollback — migrate skipped"
+  else
+    $COMPOSE --profile ops run --rm migrate
+  fi
+fi`
+  : `if [ "\${SKIP_MIGRATE:-0}" = "1" ]; then
+  echo "  (SKIP_MIGRATE=1 — skipped; use it to roll back past a schema change)"
+else
+  $COMPOSE --profile ops run --rm migrate
+fi`;
 
 file("infra/elcodelabs/deploy.sh", `#!/usr/bin/env bash
 # ${name} — deploy on the elcodelabs VPS (procedure: knowledge/DEPLOYMENT.md).
@@ -957,7 +1043,12 @@ file("infra/elcodelabs/deploy.sh", `#!/usr/bin/env bash
 #   SKIP_BACKUP=1     skip the DB dump (FIRST deploy only, while the database is still empty)
 #   SKIP_PULL=1       use an image already on the machine (production always pulls)
 #   MYSQLDUMP="..."   dump command (default: sudo -n mysqldump — MySQL root via auth_socket)
+#   SKIP_MIGRATE=1    do not migrate (Go detects a rollback past a schema change by itself)
+#
+# Scheduled, rotated backups are the server's job, not this script's (knowledge/DEPLOYMENT.md
+# › Backups). This script keeps one dump: the state right before migrating.
 set -euo pipefail
+umask 077 # dumps and logs are readable by the owner only from the moment they exist
 cd "$(dirname "$0")"
 
 APP=${slug}
@@ -1005,23 +1096,52 @@ if [ "\${SKIP_PULL:-0}" = "1" ]; then
 else
   $COMPOSE pull app
 fi
+# Every setting this version needs is in .env — checked before anything changes. The keys come
+# from the image's own copy of .env.production.example; one written as <...> there must have a
+# value here.
+missing=""
+while IFS= read -r line; do
+  key="\${line%%=*}"
+  example="\${line#*=}"
+  if ! grep -qE "^\${key}=" .env; then
+    missing="\${missing} \${key}"
+  elif [ "\${example#<}" != "$example" ] && [ -z "$(envval "$key")" ]; then
+    missing="\${missing} \${key}(empty)"
+  fi
+done < <(docker run --rm --entrypoint cat "$IMAGE" /app/env.production.example 2>/dev/null | grep -E '^[A-Z][A-Z0-9_]*=' || true)
+if [ -n "$missing" ]; then
+  echo "  ✗ .env lacks settings this version needs:\${missing}"
+  echo "    Add them (see infra/elcodelabs/.env.production.example) and rerun. Nothing was changed."
+  exit 1
+fi
 
 echo "▶ [2/5] back up \${DB_NAME} before migrating"
 if [ "\${SKIP_BACKUP:-0}" = "1" ]; then
   echo "  (SKIP_BACKUP=1 — skipped; first deploy on an empty database only)"
 else
-  out="backups/pre-deploy-$(date +%Y%m%d-%H%M%S)-\${TAG:0:12}.sql.gz"
-  # pipefail: a failed dump fails the deploy (never migrate without a backup).
+  # One dump, replaced each deploy: the state right before this migration. Written beside the
+  # old one first, so a failed dump keeps the previous dump. pipefail: a failed dump fails
+  # the deploy (never migrate without a backup).
+  out="backups/pre-deploy.sql.gz"
   $MYSQLDUMP --single-transaction --routines --triggers --events --hex-blob \\
-    --default-character-set=utf8mb4 --set-gtid-purged=OFF --no-tablespaces "$DB_NAME" | gzip -9 > "$out"
-  chmod 600 "$out"
-  echo "  ✓ \${out} ($(du -h "$out" | cut -f1))"
+    --default-character-set=utf8mb4 --set-gtid-purged=OFF --no-tablespaces "$DB_NAME" | gzip -9 > "$out.tmp"
+  gzip -t "$out.tmp"
+  mv -f "$out.tmp" "$out"
+  rm -f backups/pre-deploy-*.sql.gz # dumps from older versions of this script
+  echo "  ✓ \${out} ($(du -h "$out" | cut -f1)) — before \${TAG:0:12}"
 fi
 
 echo "▶ [3/5] migrate"
 ${migrateStep}
 
 echo "▶ [4/5] start app"
+# Keep the outgoing version's log: it disappears with its container, and is what a rollback
+# investigation needs. The last 5 are kept.
+if docker inspect "\${APP}-app" >/dev/null 2>&1; then
+  mkdir -p logs
+  docker logs "\${APP}-app" > "logs/\${PREV_TAG:-previous}.log" 2>&1 || true
+  ls -1t logs/*.log 2>/dev/null | tail -n +6 | xargs -r rm -f
+fi
 $COMPOSE up -d app
 # Record the running version so a manual \`docker compose up\` stays on it.
 if grep -qE '^IMAGE_TAG=' .env; then
@@ -1034,6 +1154,9 @@ chmod 600 .env
 echo "▶ [5/5] wait for /readyz (max 120 s)"
 for _ in $(seq 1 24); do
   if curl -fsS "http://127.0.0.1:\${PORT}/readyz" >/dev/null 2>&1; then
+    # Keep this version and the previous one for a quick rollback; older ones only fill the disk.
+    docker images "$IMAGE_REPO" --format '{{.Tag}}' | grep -vxF -e "$TAG" -e "\${PREV_TAG:-none}" \\
+      | while read -r old; do docker rmi "\${IMAGE_REPO}:\${old}" >/dev/null 2>&1 || true; done
     docker image prune -f >/dev/null 2>&1 || true
     echo "✓ done. \${APP} is running \${IMAGE}"
     exit 0
@@ -1104,6 +1227,37 @@ const ciApiJob = backend === "go"
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+  # Migrations meet a real MySQL before production does: order checked against the base branch
+  # (an older timestamp would be skipped silently), then up, all the way down, and up again.
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: ci_db
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      DB_DSN: "root:@tcp(127.0.0.1:3306)/ci_db"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+      - name: golang-migrate
+        run: go install -tags mysql github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: node scripts/check-migrations.mjs "\${{ github.event.pull_request.base.sha || github.event.before }}"
+      - run: node scripts/migrate.mjs up && node scripts/migrate.mjs down -all && node scripts/migrate.mjs up
 `
   : "";
 file(".github/workflows/ci.yml", `name: ci
@@ -1360,7 +1514,7 @@ file("apps/web/src/shared/kernel.ts", `/**
  * apps/api/internal/kernel (see the changelog there). Library modules state the minimum they
  * need; the module installer reads it from here when a project has no Go API.
  */
-export const KERNEL_VERSION = 3;
+export const KERNEL_VERSION = 4;
 `);
 
 file("apps/web/src/shared/access.tsx", `import { createContext, useContext } from "react";
@@ -1528,13 +1682,15 @@ export const frontendModules: FrontendModule[] = [
 ];
 `);
 
-file("apps/web/src/app/composition.ts", `import type { Composition, SlotName } from "@/shared/composition";
+file("apps/web/src/app/composition.ts", `import { Fragment, createElement } from "react";
+import type { Composition, SlotName } from "@/shared/composition";
 import { frontendModules } from "@/app/modules";
 
+// Each module's slot content is keyed by the module, so a slot renders as a proper list.
 const slots: Composition["slots"] = {};
 for (const m of frontendModules) {
   for (const [name, node] of Object.entries(m.slots ?? {})) {
-    (slots[name as SlotName] ??= []).push(node);
+    (slots[name as SlotName] ??= []).push(createElement(Fragment, { key: m.id }, node));
   }
 }
 
@@ -1555,9 +1711,11 @@ import type { RouteObject } from "react-router-dom";
 import { ROUTE_PATHS } from "@/app/routes/route-paths";
 import { frontendModules } from "@/app/modules";
 import { BareLayout } from "@/app/layouts/BareLayout";
+import { NotFoundPage, RouteErrorPage } from "@/shared/components/feedback/RouteError";
 
 const publicRoutes = frontendModules.flatMap((m) => m.public ?? []);
-let protectedRoutes: RouteObject[] = frontendModules.flatMap((m) => m.protected ?? []);
+// An unknown address inside the app shows "not found" in the app's own frame.
+let protectedRoutes: RouteObject[] = [...frontendModules.flatMap((m) => m.protected ?? []), { path: "*", element: <NotFoundPage /> }];
 
 // A layout module frames the protected pages (BareLayout until one is installed); a guard
 // module decides who reaches them.
@@ -1566,10 +1724,17 @@ protectedRoutes = [{ element: layout, children: protectedRoutes }];
 const guard = frontendModules.find((m) => m.guard)?.guard;
 if (guard) protectedRoutes = [{ element: guard, children: protectedRoutes }];
 
+// One root catches whatever a page throws (or a page chunk an older tab can no longer load)
+// with the app's own error page instead of the router's built-in one.
 export const router = createBrowserRouter([
-  { path: ROUTE_PATHS.home, element: <Navigate to={ROUTE_PATHS.start} replace /> },
-  ...publicRoutes,
-  ...protectedRoutes,
+  {
+    errorElement: <RouteErrorPage />,
+    children: [
+      { path: ROUTE_PATHS.home, element: <Navigate to={ROUTE_PATHS.start} replace /> },
+      ...publicRoutes,
+      ...protectedRoutes,
+    ],
+  },
 ]);
 `);
 
@@ -1613,6 +1778,53 @@ export function LoadingState() {
       <Spinner />
       <span aria-hidden="true">Memuat…</span>
     </div>
+  );
+}
+`);
+
+file("apps/web/src/shared/components/feedback/RouteError.tsx", `import type { ReactNode } from "react";
+import { isRouteErrorResponse, Link, useRouteError } from "react-router-dom";
+import { Button } from "@/shared/components/primitives/button";
+
+function Message({ title, body, action }: { title: string; body: string; action: ReactNode }) {
+  return (
+    <div role="alert" className="flex min-h-[60vh] flex-col items-center justify-center gap-3 px-4 text-center">
+      <h1 className="text-xl font-semibold text-foreground">{title}</h1>
+      <p className="max-w-md text-sm text-muted-foreground">{body}</p>
+      <div className="mt-2">{action}</div>
+    </div>
+  );
+}
+
+/** An address no module serves. */
+export function NotFoundPage() {
+  return (
+    <Message
+      title="Halaman tidak ditemukan"
+      body="Alamat ini tidak ada atau sudah dipindahkan."
+      action={
+        <Button asChild variant="outline">
+          <Link to="/">Kembali ke beranda</Link>
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * What the router shows when a page throws. A page chunk that fails to load usually means the
+ * app was updated while this tab was open: reloading fetches the new version.
+ */
+export function RouteErrorPage() {
+  const error = useRouteError();
+  if (isRouteErrorResponse(error) && error.status === 404) return <NotFoundPage />;
+  const stale = error instanceof Error && /dynamically imported module|Importing a module script failed|Loading chunk/i.test(error.message);
+  return (
+    <Message
+      title={stale ? "Aplikasi baru saja diperbarui" : "Terjadi kesalahan"}
+      body={stale ? "Muat ulang halaman untuk memakai versi terbaru." : "Halaman ini gagal ditampilkan. Coba muat ulang; jika berulang, hubungi admin."}
+      action={<Button onClick={() => window.location.reload()}>Muat ulang</Button>}
+    />
   );
 }
 `);
@@ -1795,6 +2007,8 @@ export const httpClient = axios.create({
   // Empty = same origin. Proxied by Vite in dev, served by the same container in
   // production. Only set VITE_API_BASE_URL when web and api are deployed separately.
   baseURL: import.meta.env.VITE_API_BASE_URL || "",
+  // A separate API origin only receives the session cookie when asked to.
+  withCredentials: Boolean(import.meta.env.VITE_API_BASE_URL),
   timeout: 30000,
   headers: { "Content-Type": "application/json" },
 });
@@ -1945,7 +2159,7 @@ function scaffoldModuleKeep(base, mod) {
 if (backend === "go") {
   file("apps/api/go.mod", `module ${goModule}
 
-go 1.22
+go 1.26
 
 require (
 	github.com/go-sql-driver/mysql v1.8.1
@@ -1989,10 +2203,12 @@ sql:
     "internal/modules/registry.go",
     "internal/server/server.go",
     "internal/server/middleware.go",
+    "internal/server/middleware_test.go",
     "internal/shared/apperror/apperror.go",
     "internal/shared/logger/logger.go",
     "internal/shared/pagination/pagination.go",
     "internal/shared/request/request.go",
+    "internal/shared/request/request_test.go",
     "internal/shared/response/response.go",
     "internal/shared/validator/validator.go",
   ]) {
@@ -2017,6 +2233,66 @@ if (!/^\\s*- engine:/m.test(readFileSync("apps/api/sqlc.yaml", "utf8"))) {
 const r = spawnSync("sqlc", ["generate"], { cwd: "apps/api", stdio: "inherit", shell: true });
 process.exit(r.status ?? 1);
 `);
+  file("scripts/check-migrations.mjs", `#!/usr/bin/env node
+// golang-migrate keeps ONE version per database and only applies files above it. A migration
+// added on a branch with a timestamp older than one already merged would never run anywhere
+// that ran the newer one — silently. CI runs this against the base commit; it fails on such a
+// file, and --fix gives it (and its .down) a fresh timestamp after the newest one.
+//
+// Usage: node scripts/check-migrations.mjs <base-commit> [--fix]
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+
+const DIR = "apps/api/migrations";
+const [base, flag] = process.argv.slice(2);
+const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+const version = (f) => f.match(/^(\\d{14})_/)?.[1];
+
+if (!base || /^0+$/.test(base)) {
+  console.log("check-migrations: no base commit (first push of a branch) — skipped");
+  process.exit(0);
+}
+try {
+  git("cat-file", "-e", \`\${base}^{commit}\`);
+} catch {
+  console.log(\`check-migrations: \${base} is not in this checkout (fetch-depth 0?) — skipped\`);
+  process.exit(0);
+}
+const before = git("ls-tree", "--name-only", \`\${base}:\${DIR}\`).split("\\n").map(version).filter(Boolean);
+const newest = before.sort().at(-1) ?? "0";
+const added = git("diff", "--name-only", "--diff-filter=A", base, "--", DIR)
+  .split("\\n").filter(Boolean).map((p) => p.split("/").at(-1)).filter((f) => version(f));
+const late = [...new Set(added.filter((f) => version(f) <= newest).map((f) => f.replace(/\\.(up|down)\\.sql$/, "")))];
+
+if (late.length === 0) {
+  console.log(\`check-migrations: \${added.length} new migration file(s), all after \${newest}\`);
+  process.exit(0);
+}
+if (flag !== "--fix") {
+  console.error(\`✗ older than \${newest}, the newest migration on the base branch — they would never run:\`);
+  for (const b of late) console.error(\`  \${b}\`);
+  console.error("  Fix: node scripts/check-migrations.mjs " + base + " --fix   (renames them; they have not run anywhere yet)");
+  process.exit(1);
+}
+// Fresh, ordered timestamps after everything that exists — on the base branch and here.
+const all = readdirSync(DIR).map(version).filter(Boolean).concat(newest).sort();
+let t = Math.max(Date.now(), Date.parse(all.at(-1).replace(/^(\\d{4})(\\d\\d)(\\d\\d)(\\d\\d)(\\d\\d)(\\d\\d)$/, "$1-$2-$3T$4:$5:$6Z")) + 1000);
+const lockFile = "modules.lock.json";
+let lock = existsSync(lockFile) ? readFileSync(lockFile, "utf8") : null;
+for (const oldBase of late.sort()) {
+  const stamp = new Date(t).toISOString().replace(/[-:T]/g, "").slice(0, 14);
+  const newBase = stamp + oldBase.slice(14);
+  for (const dir of ["up", "down"]) {
+    if (existsSync(\`\${DIR}/\${oldBase}.\${dir}.sql\`)) renameSync(\`\${DIR}/\${oldBase}.\${dir}.sql\`, \`\${DIR}/\${newBase}.\${dir}.sql\`);
+  }
+  if (lock) lock = lock.replaceAll(\`"\${oldBase}"\`, \`"\${newBase}"\`);
+  console.log(\`  \${oldBase} → \${newBase}\`);
+  t += 1000;
+}
+if (lock) writeFileSync(lockFile, lock);
+console.log("✓ renamed — commit the change");
+`);
+
   file("scripts/migrate.mjs", `#!/usr/bin/env node
 // golang-migrate wrapper that works the same in PowerShell, cmd, and sh.
 // npm runs scripts through cmd.exe on Windows, which does not expand $VAR — so the DB

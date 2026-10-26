@@ -20,6 +20,14 @@ func Open(dsn string) (*sql.DB, error) {
 	// sqlc scans DATETIME/TIMESTAMP columns into time.Time, which needs parseTime. Set here
 	// rather than in DB_DSN, because golang-migrate reads the same variable.
 	cfg.ParseTime = true
+	// Every session runs in UTC whatever the host MySQL's time zone is, matching the driver's
+	// default Loc (UTC). Without it, TIMESTAMP columns written and read through a server set
+	// to WIB shift by seven hours. Day boundaries ("today" for a cashier) are computed in
+	// Asia/Jakarta explicitly, in code.
+	if cfg.Params == nil {
+		cfg.Params = map[string]string{}
+	}
+	cfg.Params["time_zone"] = "'+00:00'"
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {

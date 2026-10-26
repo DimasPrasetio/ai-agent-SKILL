@@ -68,7 +68,9 @@ func run() error {
 	case <-ctx.Done():
 	}
 
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 25 s fits inside docker's stop_grace_period (30 s in the prod compose) and lets most
+	// long requests finish; the server's WriteTimeout bounds the rest.
+	shutdown, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

@@ -87,7 +87,7 @@ auto-added by `module.mjs add`/`upgrade` when a module needs them):
 
 | Kit | What it gives |
 | --- | --- |
-| `ui-core` | More primitives (table, select, tabs, popover, sheet, switch, …) and the page vocabulary: `Page`, `PageHeader`, `SectionCard`, `SummaryCard`, `StatusBadge` (tones success/warning/danger/info/neutral/muted), `Notice`, empty/error/not-found states, skeletons, `DescriptionList`, `Money`/`Qty`/`DocNumber`, `Modal`, `FormSheet`, `lib/format` (id-ID). |
+| `ui-core` | More primitives (table, select, tabs, popover, sheet, switch, …) and the page vocabulary: `Page`, `PageHeader`, `SectionCard`, `SummaryCard`, `StatusBadge` (tones success/warning/danger/info/neutral/muted), `Notice`, empty/error/not-found states, skeletons, `DescriptionList`, `Money`/`Qty`/`DocNumber`, `Modal`, `FormSheet`, `lib/format` (id-ID), and `hooks/use-resource` — how a page loads data (below). |
 | `ui-data` | `DataTable` (sort, selection + bulk actions, column chooser, loading/error/empty), `Pagination`, `Toolbar`, `FilterBar`, `SearchInput`, `ActionMenu`, `NavTabs`. |
 | `ui-forms` | `FormField` (label, hint, error, aria wiring), `PasswordInput`, `SearchSelect`, `AsyncSearchSelect`, `HierarchicalSelect`, `Segmented`, `MultiToggle`, `DateRangeFields`, `KeyValueEditor`, `LineItemsEditor`, `FileDropzone`, `Stepper`, form layout parts. |
 | `ui-feedback` | Toasts (`notify.success/error(err)`), a global request loader, `ConfirmDialog`, `ReasonDialog`, error boundary. Registers its provider through `FrontendModule.provider`. |
@@ -96,6 +96,17 @@ Before writing a generic component, look in these kits (the `ui-gallery` module 
 them on one page). Default copy is Indonesian and every visible string is a prop, so a kit is
 adjusted by passing text, not by forking it. A component the kits lack is built in `shared/`
 in the same style and is a candidate to promote into a kit.
+
+**Loading data on a page** goes through `useResource(load, deps)` from `ui-core`: when the
+inputs change (page, search, filter) it aborts the previous request and drops any late answer,
+so an old search can never overwrite the new one, and it keeps the last data while reloading.
+Services accept the `AbortSignal` it passes (`httpClient.get(url, { params, signal })`). There is
+no query cache by design (TanStack is outside the standard); a page owns its data.
+
+**Errors and unknown addresses.** The router's root `errorElement` shows the app's own error
+page (`shared/components/feedback/RouteError.tsx` — it recognises a page chunk an open tab can no
+longer load after a deploy and offers a reload), and a catch-all route inside the layout shows
+"not found" in the app's frame. Slot content is keyed by module, so a slot renders as a list.
 
 ## Structure
 
@@ -292,6 +303,8 @@ export const httpClient = axios.create({
   // Empty = same origin. Proxied by Vite in dev, served by the same container in
   // production. Only set VITE_API_BASE_URL when web and api are deployed separately.
   baseURL: import.meta.env.VITE_API_BASE_URL || "",
+  // A separate API origin only receives the session cookie when asked to.
+  withCredentials: Boolean(import.meta.env.VITE_API_BASE_URL),
   timeout: 30000,
   headers: { "Content-Type": "application/json" },
 });

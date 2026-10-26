@@ -34,6 +34,14 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux) error) (*http.Server,
 	if err := register(mux); err != nil {
 		return nil, err
 	}
+	// Modules declared permissions: something must decide them. Refused in production,
+	// warned in development (where "signed in = allowed" keeps a lone module usable).
+	if err := d.Authz.Check(); err != nil {
+		if d.Config.IsProduction() {
+			return nil, err
+		}
+		d.Log.Warn("authz: " + err.Error())
+	}
 
 	// An unknown API path answers a JSON 404 instead of falling through to the SPA.
 	// http.ServeMux picks the most specific pattern, so every route above still wins.
@@ -48,7 +56,7 @@ func New(d *kernel.Deps, register func(mux *http.ServeMux) error) (*http.Server,
 
 	return &http.Server{
 		Addr:              ":" + d.Config.Port,
-		Handler:           chain(mux, requestID(d.Log), logRequests, recoverPanics),
+		Handler:           chain(mux, requestID(d.Log), clientIP(d.Config.TrustedProxies), logRequests, recoverPanics, sameOrigin),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

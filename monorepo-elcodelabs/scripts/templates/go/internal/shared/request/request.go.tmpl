@@ -2,11 +2,14 @@
 package request
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"__GO_MODULE__/internal/shared/apperror"
 )
@@ -14,20 +17,30 @@ import (
 // MaxBodyBytes caps a JSON body. Uploads have their own handlers and limits.
 const MaxBodyBytes = 1 << 20
 
-// DecodeJSON reads one JSON object into dst. A malformed body, an unknown field, or
-// trailing data is the client's error and comes back as an *apperror.Error (400).
+// DecodeJSON reads one JSON object into dst. Only an application/json body is accepted: a
+// browser cannot send that cross-site without CORS, which is what keeps a cookie-authenticated
+// API safe from forged form or text/plain posts (415 otherwise). A malformed body, an unknown
+// field, or trailing data is the client's error (400); messages never echo Go internals.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		return apperror.New(http.StatusUnsupportedMediaType, "Isi permintaan harus berformat JSON (Content-Type: application/json)")
+	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		var tooLarge *http.MaxBytesError
+		var typeErr *json.UnmarshalTypeError
 		switch {
 		case errors.As(err, &tooLarge):
 			return apperror.New(http.StatusRequestEntityTooLarge, "Isi permintaan terlalu besar")
 		case errors.Is(err, io.EOF):
 			return apperror.BadRequest("Isi permintaan kosong")
+		case errors.As(err, &typeErr) && typeErr.Field != "":
+			return apperror.BadRequest("Kolom " + typeErr.Field + " berisi tipe data yang salah")
+		case strings.HasPrefix(err.Error(), "json: unknown field "):
+			return apperror.BadRequest("Kolom tidak dikenal: " + strings.TrimPrefix(err.Error(), "json: unknown field "))
 		default:
-			return apperror.BadRequest("Isi permintaan bukan JSON yang valid: " + err.Error())
+			return apperror.BadRequest("Isi permintaan bukan JSON yang valid")
 		}
 	}
 	if dec.More() {
@@ -43,4 +56,19 @@ func PathInt64(r *http.Request, name string) (int64, error) {
 		return 0, apperror.BadRequest("Parameter " + name + " tidak valid")
 	}
 	return id, nil
+}
+
+type clientIPKey struct{}
+
+// WithClientIP records the caller's address; the server's middleware sets it for every
+// request, honouring TRUSTED_PROXIES.
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, clientIPKey{}, ip)
+}
+
+// ClientIP is the caller's address — the real client behind the host nginx, not the proxy —
+// for per-IP limits and logs.
+func ClientIP(r *http.Request) string {
+	ip, _ := r.Context().Value(clientIPKey{}).(string)
+	return ip
 }

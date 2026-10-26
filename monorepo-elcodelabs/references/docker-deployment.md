@@ -74,6 +74,10 @@ Facts not passed to the scaffolder are written as `__VPS_PORT__` / `__GHCR_OWNER
   (commit it), `npm install` otherwise. Go projects must commit `go.sum` (`go mod tidy`).
 - Runtime: non-root user **uid 10001**, `HEALTHCHECK` on `/readyz`, and **`ENTRYPOINT`, not
   `CMD`** — so `docker run <image> <args>` passes args to the app instead of replacing it.
+- `infra/elcodelabs/.env.production.example` ships inside the image (`/app/env.production.example`,
+  the one exception in `.dockerignore`), so `deploy.sh` can check the server's `.env` against
+  the version it is about to start.
+- Go: `GOMEMLIMIT=400MiB` keeps the garbage collector under the compose memory limit (512M).
 - The migration tool ships **inside the same image**, so the VPS migrates without any
   toolchain: Go → the `migrate` binary (copied from `migrate/migrate`) + `/app/migrations`;
   NestJS → Prisma CLI and engines in `node_modules` (`openssl` installed for Alpine);
@@ -143,14 +147,53 @@ What it must keep (the drift check asserts these):
 
 0. **preflight** — no placeholder markers left; `.env` exists and is `chmod 600`;
    `APP_ENV=production`; `DB_NAME` set (warns when it isn't `<slug>_db`).
-1. **pull** `ghcr.io/<owner>/<repo>:<git-sha>` (`latest` is refused — it can't be rolled back to).
-2. **backup** the app's database with `sudo -n mysqldump` into `~/<slug>/backups/` — a failed
-   dump fails the deploy. `SKIP_BACKUP=1` only for the very first deploy on an empty database.
-3. **migrate** via the `migrate` service (forward-only).
-4. **up** `app`, and record `IMAGE_TAG` in `.env`.
-5. **wait for `/readyz`** (max 120 s); on failure print logs and the rollback command.
+1. **pull** `ghcr.io/<owner>/<repo>:<git-sha>` (`latest` is refused — it can't be rolled back to),
+   then check `.env` against the image's own copy of `.env.production.example`: every key must be
+   present, and one whose example value is `<…>` must be filled. Nothing has changed yet when it
+   refuses.
+2. **backup** the app's database with `sudo -n mysqldump` into `~/<slug>/backups/pre-deploy.sql.gz`
+   — one file, replaced each deploy (written beside the old one, checked with `gzip -t`, then
+   moved). A failed dump fails the deploy. `SKIP_BACKUP=1` only for the very first deploy.
+3. **migrate** via the `migrate` service (forward-only). Go: a database marked *dirty* stops the
+   deploy; a database newer than the image's newest migration is a rollback, and migrate is
+   skipped. `SKIP_MIGRATE=1` skips it by hand (the only way for NestJS/Express).
+4. **up** `app` — after saving the outgoing container's log to `logs/<previous-tag>.log` (last 5
+   kept) — and record `IMAGE_TAG` in `.env`.
+5. **wait for `/readyz`** (max 120 s); on success remove this repo's images except the current
+   and previous tag; on failure print logs and the rollback command.
 
-Rollback = `./deploy.sh <older-git-sha>`.
+`umask 077` from the first line: dumps and logs are owner-only from the moment they exist.
+Rollback = `./deploy.sh <older-git-sha>`; it works across schema changes because releases follow
+expand/contract (the generated `.claude/rules/database.md`). Restore and failed-migration recovery
+are procedures in the project's `knowledge/DEPLOYMENT.md`.
+
+## Backups
+
+Two layers, and neither is optional:
+
+| Layer | What | Where | Kept |
+|---|---|---|---|
+| Server, nightly | every `*_db` database on the host — a new app is included from its first night | `/var/backups/elcodelabs/<db>/{daily,weekly,monthly}/` | 5 daily, 2 weekly (Sunday), 1 monthly (the 1st): 8 files at most; weekly/monthly are hard links to a daily file, so they take no extra space |
+| Per deploy | the state right before a migration | `~/<slug>/backups/pre-deploy.sql.gz` | 1, replaced each deploy |
+
+The nightly job ships with this skill in `scripts/server/` and is installed **once per server**
+(it changes the server: only with the owner's go-ahead):
+
+```bash
+sudo install -D -m 700 elcodelabs-backup.sh /opt/elcodelabs/backup.sh
+sudo install -m 644 elcodelabs-backup.service elcodelabs-backup.timer /etc/systemd/system/
+sudo install -D -m 600 backup.env.example /etc/elcodelabs/backup.env   # then fill in Telegram
+sudo systemctl daemon-reload && sudo systemctl enable --now elcodelabs-backup.timer
+sudo systemctl start elcodelabs-backup.service && journalctl -u elcodelabs-backup -n 20
+```
+
+It runs at 02:00 WIB as root (MySQL root through `auth_socket`), refuses to write when less than
+15% of the disk is free (MySQL stops on a full disk, taking every app with it), checks each dump
+(`gzip -t`, not empty), test-restores the newest into a scratch database on the 1st and compares
+table counts, and sends failures — plus a weekly "all fine" — to Telegram
+(`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` in `/etc/elcodelabs/backup.env`). Backups live on the
+same disk as the databases: a lost server loses them too. Off-site copies are not set up yet;
+that risk is accepted for now.
 
 ## Environment
 
